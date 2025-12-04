@@ -1,6 +1,5 @@
 // ============================================
-// BACKEND - PRONTUÁRIO ELETRÔNICO
-// Compatível com Node.js 20+
+// BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO ATUALIZADA)
 // ============================================
 
 const { createClient } = require('@supabase/supabase-js');
@@ -47,6 +46,38 @@ function verifyAdminToken(authHeader) {
     return decoded;
 }
 
+// Função para fazer upload de arquivo para o Supabase Storage
+async function uploadFileToStorage(bucket, path, fileBuffer, contentType) {
+    try {
+        console.log(`Uploading file to ${bucket}/${path}`);
+        
+        const { data, error } = await supabase
+            .storage
+            .from(bucket)
+            .upload(path, fileBuffer, {
+                contentType: contentType,
+                upsert: true
+            });
+        
+        if (error) {
+            console.error('Upload error:', error);
+            throw error;
+        }
+        
+        // Obtém a URL pública
+        const { data: urlData } = supabase
+            .storage
+            .from(bucket)
+            .getPublicUrl(path);
+        
+        console.log('Upload successful, public URL:', urlData.publicUrl);
+        return urlData.publicUrl;
+    } catch (error) {
+        console.error('Error in uploadFileToStorage:', error);
+        throw error;
+    }
+}
+
 // ============================================
 // HANDLER PRINCIPAL
 // ============================================
@@ -78,7 +109,7 @@ module.exports = async (req, res) => {
             try {
                 data = JSON.parse(body);
             } catch (e) {
-                console.log('Body não é JSON:', body.substring(0, 100));
+                console.log('Body não é JSON, tratando como raw:', body.substring(0, 100));
             }
         }
         
@@ -258,6 +289,67 @@ module.exports = async (req, res) => {
             }
         }
         
+        // UPLOAD DE AVATAR DO PACIENTE
+        if (url.includes('/api/patient/avatar') && method === 'POST') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                // Espera receber { avatar: base64String }
+                const { avatar } = data;
+                
+                if (!avatar) {
+                    return res.status(400).json({ error: 'Avatar é obrigatório' });
+                }
+                
+                // Verifica se é base64 válido
+                if (!avatar.startsWith('data:image/')) {
+                    return res.status(400).json({ error: 'Formato de imagem inválido' });
+                }
+                
+                // Extrai o tipo MIME da string base64
+                const matches = avatar.match(/^data:image\/(\w+);base64,/);
+                if (!matches) {
+                    return res.status(400).json({ error: 'Formato base64 inválido' });
+                }
+                
+                const mimeType = matches[1];
+                const base64Data = avatar.replace(/^data:image\/\w+;base64,/, '');
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                // Define o caminho no storage
+                const fileName = `patient-${decoded.id}-${Date.now()}.${mimeType}`;
+                const path = `avatars/${fileName}`;
+                
+                console.log(`Uploading avatar for patient ${decoded.id}, path: ${path}`);
+                
+                // Faz upload
+                const publicUrl = await uploadFileToStorage('uploads', path, buffer, `image/${mimeType}`);
+                
+                // Atualiza o paciente com a nova URL do avatar
+                const { data: updatedPatient, error: updateError } = await supabase
+                    .from('patients')
+                    .update({ avatar_url: publicUrl })
+                    .eq('id', decoded.id)
+                    .select()
+                    .single();
+                
+                if (updateError) {
+                    console.error('Error updating patient:', updateError);
+                    throw updateError;
+                }
+                
+                return res.status(200).json({ 
+                    success: true, 
+                    avatar_url: publicUrl 
+                });
+            } catch (error) {
+                console.error('Error in /api/patient/avatar:', error);
+                return res.status(500).json({ 
+                    error: 'Erro ao processar imagem: ' + error.message 
+                });
+            }
+        }
+        
         // ============================================
         // ROTAS DO ADMIN (PROTEGIDAS)
         // ============================================
@@ -378,32 +470,174 @@ module.exports = async (req, res) => {
             }
         }
         
-        // ADICIONAR EXAME (simplificado - sem upload de arquivo por enquanto)
+        // ADICIONAR EXAME (com upload de arquivo base64)
         if (url.match(/\/api\/admin\/clients\/[^/]+\/exams$/) && method === 'POST') {
             try {
                 verifyAdminToken(req.headers.authorization);
                 
                 const parts = url.split('/');
                 const clientId = parts[parts.length - 2];
-                const { type, file_url } = data;
+                const { type, file } = data; // file é base64
                 
-                if (!type || !file_url) {
-                    return res.status(400).json({ error: 'Tipo e URL do arquivo são obrigatórios' });
+                if (!type || !file) {
+                    return res.status(400).json({ error: 'Tipo e arquivo são obrigatórios' });
                 }
                 
-                const { data: exam, error } = await supabase
+                // Verifica se é base64 válido
+                if (!file.startsWith('data:application/pdf;base64,')) {
+                    return res.status(400).json({ error: 'Formato de arquivo inválido. Apenas PDF são aceitos.' });
+                }
+                
+                // Converte base64 para buffer
+                const base64Data = file.replace(/^data:application\/pdf;base64,/, '');
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                // Define o caminho no storage
+                const fileName = `${type.replace(/\s+/g, '-').toLowerCase()}-${clientId}-${Date.now()}.pdf`;
+                const path = `exams/${fileName}`;
+                
+                console.log(`Uploading exam for client ${clientId}, path: ${path}`);
+                
+                // Faz upload
+                const publicUrl = await uploadFileToStorage('uploads', path, buffer, 'application/pdf');
+                
+                // Insere o exame no banco
+                const { data: exam, error: insertError } = await supabase
                     .from('exams')
                     .insert({
                         patient_id: clientId,
                         type,
-                        file_url
+                        file_url: publicUrl
                     })
                     .select()
                     .single();
                 
-                if (error) throw error;
+                if (insertError) throw insertError;
                 
                 return res.status(201).json(exam);
+            } catch (error) {
+                console.error('Error uploading exam:', error);
+                return res.status(500).json({ error: 'Erro ao enviar exame: ' + error.message });
+            }
+        }
+        
+        // UPLOAD DE AVATAR DO CLIENTE PELO ADMIN
+        if (url.match(/\/api\/admin\/clients\/[^/]+\/avatar$/) && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const parts = url.split('/');
+                const clientId = parts[parts.length - 2];
+                const { avatar } = data;
+                
+                if (!avatar) {
+                    return res.status(400).json({ error: 'Avatar é obrigatório' });
+                }
+                
+                // Verifica se é base64 válido
+                if (!avatar.startsWith('data:image/')) {
+                    return res.status(400).json({ error: 'Formato de imagem inválido' });
+                }
+                
+                // Extrai o tipo MIME da string base64
+                const matches = avatar.match(/^data:image\/(\w+);base64,/);
+                if (!matches) {
+                    return res.status(400).json({ error: 'Formato base64 inválido' });
+                }
+                
+                const mimeType = matches[1];
+                const base64Data = avatar.replace(/^data:image\/\w+;base64,/, '');
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                // Define o caminho no storage
+                const fileName = `patient-${clientId}-${Date.now()}.${mimeType}`;
+                const path = `avatars/${fileName}`;
+                
+                console.log(`Uploading avatar for client ${clientId}, path: ${path}`);
+                
+                // Faz upload
+                const publicUrl = await uploadFileToStorage('uploads', path, buffer, `image/${mimeType}`);
+                
+                // Atualiza o paciente com a nova URL do avatar
+                const { data: updatedPatient, error: updateError } = await supabase
+                    .from('patients')
+                    .update({ avatar_url: publicUrl })
+                    .eq('id', clientId)
+                    .select()
+                    .single();
+                
+                if (updateError) {
+                    console.error('Error updating patient:', updateError);
+                    throw updateError;
+                }
+                
+                return res.status(200).json({ 
+                    success: true, 
+                    avatar_url: publicUrl 
+                });
+            } catch (error) {
+                console.error('Error in /api/admin/clients/avatar:', error);
+                return res.status(500).json({ 
+                    error: 'Erro ao processar imagem: ' + error.message 
+                });
+            }
+        }
+        
+        // DELETAR CONSULTA
+        if (url.match(/\/api\/admin\/history\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const historyId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('consultations')
+                    .delete()
+                    .eq('id', historyId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // DELETAR EXAME
+        if (url.match(/\/api\/admin\/exams\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const examId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('exams')
+                    .delete()
+                    .eq('id', examId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // DELETAR CLIENTE
+        if (url.match(/\/api\/admin\/clients\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const clientId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('patients')
+                    .delete()
+                    .eq('id', clientId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
             } catch (error) {
                 return res.status(400).json({ error: error.message });
             }
@@ -417,66 +651,68 @@ module.exports = async (req, res) => {
                 environment: 'production'
             });
         }
-        // No final do handler, antes da "Rota não encontrada", adicione:
-
-// ROTA RAIZ - Health Check
-if (url === '/' && method === 'GET') {
-    return res.status(200).json({ 
-        message: 'API do Prontuário Eletrônico',
-        version: '1.0.0',
-        status: 'online',
-        timestamp: new Date().toISOString(),
-        routes: {
-            auth: {
-                register: 'POST /api/auth/register',
-                login: 'POST /api/auth/login',
-                adminLogin: 'POST /api/admin/login'
-            },
-            patient: {
-                history: 'GET /api/patient/history',
-                exams: 'GET /api/patient/exams'
-            },
-            admin: {
-                clients: 'GET /api/admin/clients',
-                clientDetail: 'GET /api/admin/clients/:id'
+        
+        // ROTA RAIZ - Health Check
+        if (url === '/' && method === 'GET') {
+            return res.status(200).json({ 
+                message: 'API do Prontuário Eletrônico',
+                version: '1.0.0',
+                status: 'online',
+                timestamp: new Date().toISOString(),
+                routes: {
+                    auth: {
+                        register: 'POST /api/auth/register',
+                        login: 'POST /api/auth/login',
+                        adminLogin: 'POST /api/admin/login'
+                    },
+                    patient: {
+                        history: 'GET /api/patient/history',
+                        exams: 'GET /api/patient/exams',
+                        avatar: 'POST /api/patient/avatar'
+                    },
+                    admin: {
+                        clients: 'GET /api/admin/clients',
+                        clientDetail: 'GET /api/admin/clients/:id',
+                        clientHistory: 'GET /api/admin/clients/:id/history',
+                        addHistory: 'POST /api/admin/clients/:id/history',
+                        clientExams: 'GET /api/admin/clients/:id/exams',
+                        addExam: 'POST /api/admin/clients/:id/exams',
+                        clientAvatar: 'POST /api/admin/clients/:id/avatar',
+                        deleteHistory: 'DELETE /api/admin/history/:id',
+                        deleteExam: 'DELETE /api/admin/exams/:id',
+                        deleteClient: 'DELETE /api/admin/clients/:id'
+                    }
+                }
+            });
+        }
+        
+        // TESTE DE CONEXÃO COM SUPABASE
+        if (url === '/api/health' && method === 'GET') {
+            try {
+                // Testa conexão com Supabase
+                const { data, error } = await supabase
+                    .from('patients')
+                    .select('count')
+                    .limit(1);
+                
+                return res.status(200).json({
+                    status: 'healthy',
+                    supabase: error ? 'connection_error' : 'connected',
+                    timestamp: new Date().toISOString(),
+                    environment: {
+                        supabase_url: supabaseUrl ? 'configured' : 'missing',
+                        jwt_secret: jwtSecret ? 'configured' : 'default',
+                        admin_user: adminUser ? 'configured' : 'default'
+                    }
+                });
+            } catch (error) {
+                return res.status(500).json({
+                    status: 'unhealthy',
+                    error: error.message,
+                    timestamp: new Date().toISOString()
+                });
             }
         }
-    });
-}
-
-// ============================================
-// TESTE DE CONEXÃO COM SUPABASE
-// ============================================
-
-// Rota para testar conexão com Supabase
-if (url === '/api/health' && method === 'GET') {
-    try {
-        // Testa conexão com Supabase
-        const { data, error } = await supabase
-            .from('patients')
-            .select('count')
-            .limit(1);
-        
-        return res.status(200).json({
-            status: 'healthy',
-            supabase: error ? 'connection_error' : 'connected',
-            timestamp: new Date().toISOString(),
-            environment: {
-                supabase_url: supabaseUrl ? 'configured' : 'missing',
-                jwt_secret: jwtSecret ? 'configured' : 'default',
-                admin_user: adminUser ? 'configured' : 'default'
-            }
-        });
-    } catch (error) {
-        return res.status(500).json({
-            status: 'unhealthy',
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-}
-
-// Continue com o resto do código...
         
         // ROTA NÃO ENCONTRADA
         console.log('Rota não encontrada:', url);
