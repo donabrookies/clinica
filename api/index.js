@@ -417,6 +417,66 @@ module.exports = async (req, res) => {
                 environment: 'production'
             });
         }
+        // No final do handler, antes da "Rota não encontrada", adicione:
+
+// ROTA RAIZ - Health Check
+if (url === '/' && method === 'GET') {
+    return res.status(200).json({ 
+        message: 'API do Prontuário Eletrônico',
+        version: '1.0.0',
+        status: 'online',
+        timestamp: new Date().toISOString(),
+        routes: {
+            auth: {
+                register: 'POST /api/auth/register',
+                login: 'POST /api/auth/login',
+                adminLogin: 'POST /api/admin/login'
+            },
+            patient: {
+                history: 'GET /api/patient/history',
+                exams: 'GET /api/patient/exams'
+            },
+            admin: {
+                clients: 'GET /api/admin/clients',
+                clientDetail: 'GET /api/admin/clients/:id'
+            }
+        }
+    });
+}
+
+// ============================================
+// TESTE DE CONEXÃO COM SUPABASE
+// ============================================
+
+// Rota para testar conexão com Supabase
+if (url === '/api/health' && method === 'GET') {
+    try {
+        // Testa conexão com Supabase
+        const { data, error } = await supabase
+            .from('patients')
+            .select('count')
+            .limit(1);
+        
+        return res.status(200).json({
+            status: 'healthy',
+            supabase: error ? 'connection_error' : 'connected',
+            timestamp: new Date().toISOString(),
+            environment: {
+                supabase_url: supabaseUrl ? 'configured' : 'missing',
+                jwt_secret: jwtSecret ? 'configured' : 'default',
+                admin_user: adminUser ? 'configured' : 'default'
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({
+            status: 'unhealthy',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+}
+
+// Continue com o resto do código...
         
         // ROTA NÃO ENCONTRADA
         console.log('Rota não encontrada:', url);
