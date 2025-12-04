@@ -8,9 +8,9 @@
     "formidable": "^3.5.1"
   },
   "devDependencies": {
-    "@vercel/node": "^3.0.0"
+    "@vercel/node": "^4.0.0"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=20.0.0"
   }
 }
