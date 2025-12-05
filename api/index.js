@@ -121,10 +121,10 @@ module.exports = async (req, res) => {
         if (url.includes('/api/auth/register') && method === 'POST') {
             console.log('Tentando cadastrar paciente:', data);
             
-            const { name, cpf, dob, password } = data;
+            const { name, cpf, dob, password, whatsapp } = data;
             
             // Validação básica
-            if (!name || !cpf || !dob || !password) {
+            if (!name || !cpf || !dob || !password || !whatsapp) {
                 return res.status(400).json({ 
                     error: 'Todos os campos são obrigatórios' 
                 });
@@ -159,7 +159,8 @@ module.exports = async (req, res) => {
                     name: name.trim(),
                     cpf: cleanCpf,
                     dob,
-                    password_hash: passwordHash
+                    password_hash: passwordHash,
+                    whatsapp: whatsapp.trim()
                 })
                 .select()
                 .single();
@@ -452,10 +453,10 @@ module.exports = async (req, res) => {
             try {
                 const decoded = verifyToken(req.headers.authorization);
                 
-                const { doctor_id, appointment_date, appointment_time, notes } = data;
+                const { doctor_id, appointment_date, appointment_time, notes, whatsapp } = data;
                 
-                if (!doctor_id || !appointment_date || !appointment_time) {
-                    return res.status(400).json({ error: 'Médico, data e horário são obrigatórios' });
+                if (!doctor_id || !appointment_date || !appointment_time || !whatsapp) {
+                    return res.status(400).json({ error: 'Médico, data, horário e WhatsApp são obrigatórios' });
                 }
                 
                 // Verifica se o médico trabalha nesse dia e horário
@@ -502,6 +503,7 @@ module.exports = async (req, res) => {
                         appointment_date,
                         appointment_time,
                         notes: notes || '',
+                        whatsapp: whatsapp.trim(),
                         status: 'agendado'
                     })
                     .select()
@@ -522,17 +524,29 @@ module.exports = async (req, res) => {
                 
                 const appointmentId = url.split('/')[3];
                 
+                // Primeiro verifica se o agendamento existe e pertence ao paciente
+                const { data: appointment, error: fetchError } = await supabase
+                    .from('appointments')
+                    .select('*')
+                    .eq('id', appointmentId)
+                    .eq('patient_id', decoded.id)
+                    .single();
+                
+                if (fetchError || !appointment) {
+                    return res.status(404).json({ error: 'Agendamento não encontrado' });
+                }
+                
+                // Cancela o agendamento
                 const { error } = await supabase
                     .from('appointments')
                     .update({ status: 'cancelado' })
-                    .eq('id', appointmentId)
-                    .eq('patient_id', decoded.id);
+                    .eq('id', appointmentId);
                 
                 if (error) throw error;
                 
                 return res.status(200).json({ success: true });
             } catch (error) {
-                return res.status(400).json({ error: error.message });
+                return res.status(500).json({ error: 'Erro ao cancelar agendamento' });
             }
         }
         
@@ -547,7 +561,7 @@ module.exports = async (req, res) => {
                 
                 const { data: clients, error } = await supabase
                     .from('patients')
-                    .select('id, name, cpf, dob, avatar_url, created_at')
+                    .select('id, name, cpf, dob, avatar_url, whatsapp, created_at')
                     .order('name');
                 
                 if (error) throw error;
@@ -567,7 +581,7 @@ module.exports = async (req, res) => {
                 
                 const { data: client, error } = await supabase
                     .from('patients')
-                    .select('id, name, cpf, dob, avatar_url, created_at')
+                    .select('id, name, cpf, dob, avatar_url, whatsapp, created_at')
                     .eq('id', clientId)
                     .single();
                 
@@ -796,10 +810,32 @@ module.exports = async (req, res) => {
             try {
                 verifyAdminToken(req.headers.authorization);
                 
-                const { name, specialty, description, phone, email } = data;
+                const { name, specialty, description, phone, email, avatar } = data;
                 
                 if (!name || !specialty) {
                     return res.status(400).json({ error: 'Nome e especialidade são obrigatórios' });
+                }
+                
+                let avatar_url = null;
+                if (avatar) {
+                    // Verifica se é base64 válido
+                    if (!avatar.startsWith('data:image/')) {
+                        return res.status(400).json({ error: 'Formato de imagem inválido' });
+                    }
+                    
+                    const matches = avatar.match(/^data:image\/(\w+);base64,/);
+                    if (!matches) {
+                        return res.status(400).json({ error: 'Formato base64 inválido' });
+                    }
+                    
+                    const mimeType = matches[1];
+                    const base64Data = avatar.replace(/^data:image\/\w+;base64,/, '');
+                    const buffer = Buffer.from(base64Data, 'base64');
+                    
+                    const fileName = `doctor-${Date.now()}.${mimeType}`;
+                    const path = `doctors/${fileName}`;
+                    
+                    avatar_url = await uploadFileToStorage('uploads', path, buffer, `image/${mimeType}`);
                 }
                 
                 const { data: doctor, error } = await supabase
@@ -810,6 +846,7 @@ module.exports = async (req, res) => {
                         description: description || '',
                         phone: phone || '',
                         email: email || '',
+                        avatar_url,
                         active: true
                     })
                     .select()
@@ -829,18 +866,42 @@ module.exports = async (req, res) => {
                 verifyAdminToken(req.headers.authorization);
                 
                 const doctorId = url.split('/').pop();
-                const { name, specialty, description, phone, email, active } = data;
+                const { name, specialty, description, phone, email, active, avatar } = data;
+                
+                let updateData = {
+                    name,
+                    specialty,
+                    description,
+                    phone,
+                    email,
+                    active
+                };
+                
+                if (avatar) {
+                    // Verifica se é base64 válido
+                    if (!avatar.startsWith('data:image/')) {
+                        return res.status(400).json({ error: 'Formato de imagem inválido' });
+                    }
+                    
+                    const matches = avatar.match(/^data:image\/(\w+);base64,/);
+                    if (!matches) {
+                        return res.status(400).json({ error: 'Formato base64 inválido' });
+                    }
+                    
+                    const mimeType = matches[1];
+                    const base64Data = avatar.replace(/^data:image\/\w+;base64,/, '');
+                    const buffer = Buffer.from(base64Data, 'base64');
+                    
+                    const fileName = `doctor-${doctorId}-${Date.now()}.${mimeType}`;
+                    const path = `doctors/${fileName}`;
+                    
+                    const avatar_url = await uploadFileToStorage('uploads', path, buffer, `image/${mimeType}`);
+                    updateData.avatar_url = avatar_url;
+                }
                 
                 const { data: doctor, error } = await supabase
                     .from('doctors')
-                    .update({
-                        name,
-                        specialty,
-                        description,
-                        phone,
-                        email,
-                        active
-                    })
+                    .update(updateData)
                     .eq('id', doctorId)
                     .select()
                     .single();
@@ -877,22 +938,21 @@ module.exports = async (req, res) => {
         // ROTAS DE DIAS DE TRABALHO (ADMIN)
         // ============================================
         
-        // LISTAR DIAS DE TRABALHO DO MÉDICO
-        if (url.includes('/api/admin/doctor-work-days') && method === 'GET') {
+        // LISTAR DIAS DE TRABALHO
+        if (url.includes('/api/admin/work-days') && method === 'GET') {
             try {
                 verifyAdminToken(req.headers.authorization);
-                const urlParams = new URLSearchParams(url.split('?')[1]);
-                const doctor_id = urlParams.get('doctor_id') || data.doctor_id;
-                
-                if (!doctor_id) {
-                    return res.status(400).json({ error: 'ID do médico é obrigatório' });
-                }
                 
                 const { data: workDays, error } = await supabase
                     .from('doctor_work_days')
-                    .select('*')
-                    .eq('doctor_id', doctor_id)
-                    .order('work_date');
+                    .select(`
+                        *,
+                        doctors (
+                            name,
+                            specialty
+                        )
+                    `)
+                    .order('work_date', { ascending: false });
                 
                 if (error) throw error;
                 
@@ -960,7 +1020,7 @@ module.exports = async (req, res) => {
                 
                 return res.status(200).json({ success: true });
             } catch (error) {
-                return res.status(400).json({ error: error.message });
+                return res.status(401).json({ error: error.message });
             }
         }
         
@@ -983,7 +1043,8 @@ module.exports = async (req, res) => {
                         *,
                         patients (
                             name,
-                            cpf
+                            cpf,
+                            whatsapp
                         ),
                         doctors (
                             name,
@@ -1155,7 +1216,7 @@ module.exports = async (req, res) => {
                         createDoctor: 'POST /api/admin/doctors',
                         updateDoctor: 'PUT /api/admin/doctors/:id',
                         deleteDoctor: 'DELETE /api/admin/doctors/:id',
-                        workDays: 'GET /api/admin/doctor-work-days',
+                        workDays: 'GET /api/admin/work-days',
                         addWorkDay: 'POST /api/admin/doctor-work-days',
                         deleteWorkDay: 'DELETE /api/admin/doctor-work-days/:id',
                         appointments: 'GET /api/admin/appointments',
