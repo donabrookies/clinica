@@ -341,6 +341,41 @@ module.exports = async (req, res) => {
         // ROTAS DO PACIENTE (PROTEGIDAS)
         // ============================================
 
+        // ATUALIZAR PERFIL DO PACIENTE
+        if (url === '/api/patient/profile' && method === 'PUT') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const { name, whatsapp } = data;
+                
+                if (!name) {
+                    return res.status(400).json({ error: 'Nome é obrigatório' });
+                }
+                
+                const updateData = {
+                    name: name.trim(),
+                    updated_at: new Date().toISOString()
+                };
+                
+                if (whatsapp) {
+                    updateData.whatsapp = whatsapp.trim();
+                }
+                
+                const { data: updatedPatient, error } = await supabase
+                    .from('patients')
+                    .update(updateData)
+                    .eq('id', decoded.id)
+                    .select('id, name, cpf, dob, avatar_url, whatsapp, created_at')
+                    .single();
+                    
+                if (error) throw error;
+                
+                return res.status(200).json(updatedPatient);
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+
         // HISTÓRICO DO PACIENTE
         if (url === '/api/patient/history' && method === 'GET') {
             try {
@@ -420,7 +455,7 @@ module.exports = async (req, res) => {
                     .from('patients')
                     .update({ avatar_url: publicUrl })
                     .eq('id', decoded.id)
-                    .select()
+                    .select('id, name, cpf, dob, avatar_url, whatsapp, created_at')
                     .single();
 
                 if (updateError) {
@@ -504,7 +539,7 @@ module.exports = async (req, res) => {
                     .select('*')
                     .eq('doctor_id', doctor_id)
                     .gte('work_date', new Date().toISOString().split('T')[0])
-                    .order('work_date');
+                    .order('work_date', { ascending: true });
 
                 if (error) throw error;
 
@@ -570,6 +605,10 @@ module.exports = async (req, res) => {
                     return res.status(400).json({ error: 'Médico, data e WhatsApp são obrigatórios' });
                 }
 
+                // Corrigir bug da data - garantir que está no formato correto
+                const dateObj = new Date(appointment_date);
+                const correctedDate = dateObj.toISOString().split('T')[0];
+                
                 // Horário fixo
                 const appointment_time = '08:00';
 
@@ -578,7 +617,7 @@ module.exports = async (req, res) => {
                     .from('doctor_work_days')
                     .select('*')
                     .eq('doctor_id', doctor_id)
-                    .eq('work_date', appointment_date)
+                    .eq('work_date', correctedDate)
                     .single();
 
                 if (workDayError || !workDay) {
@@ -590,7 +629,7 @@ module.exports = async (req, res) => {
                     .from('appointments')
                     .select('id')
                     .eq('doctor_id', doctor_id)
-                    .eq('appointment_date', appointment_date)
+                    .eq('appointment_date', correctedDate)
                     .eq('status', 'agendado')
                     .maybeSingle();
 
@@ -604,7 +643,7 @@ module.exports = async (req, res) => {
                     .insert({
                         patient_id: decoded.id,
                         doctor_id,
-                        appointment_date,
+                        appointment_date: correctedDate,
                         appointment_time,
                         notes: notes || '',
                         whatsapp: whatsapp.trim(),
@@ -637,9 +676,14 @@ module.exports = async (req, res) => {
                             .eq('id', doctor_id)
                             .single();
 
-                        // Formatar data para mensagem
-                        const dataObj = new Date(appointment_date);
-                        const dataFormatada = dataObj.toLocaleDateString('pt-BR');
+                        // Formatar data para mensagem - CORRIGIDO
+                        const dataObj = new Date(correctedDate + 'T00:00:00');
+                        const dataFormatada = dataObj.toLocaleDateString('pt-BR', {
+                            timeZone: 'America/Sao_Paulo',
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric'
+                        });
 
                         // Montar mensagem
                         const cpfFormatado = patientData.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
@@ -884,7 +928,7 @@ module.exports = async (req, res) => {
                     .from('patients')
                     .update({ avatar_url: publicUrl })
                     .eq('id', clientId)
-                    .select()
+                    .select('id, name, cpf, dob, avatar_url, whatsapp, created_at')
                     .single();
 
                 if (updateError) {
@@ -1075,7 +1119,7 @@ module.exports = async (req, res) => {
                             specialty
                         )
                     `)
-                    .order('work_date', { ascending: false });
+                    .order('work_date', { ascending: true });
 
                 if (error) throw error;
 
@@ -1096,12 +1140,16 @@ module.exports = async (req, res) => {
                     return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
                 }
 
+                // Corrigir bug da data - garantir que está no formato correto
+                const dateObj = new Date(work_date);
+                const correctedDate = dateObj.toISOString().split('T')[0];
+
                 // Verifica se já existe dia de trabalho para este médico na mesma data
                 const { data: existing, error: checkError } = await supabase
                     .from('doctor_work_days')
                     .select('id')
                     .eq('doctor_id', doctor_id)
-                    .eq('work_date', work_date)
+                    .eq('work_date', correctedDate)
                     .maybeSingle();
 
                 if (existing) {
@@ -1112,7 +1160,7 @@ module.exports = async (req, res) => {
                     .from('doctor_work_days')
                     .insert({
                         doctor_id,
-                        work_date,
+                        work_date: correctedDate,
                         start_time,
                         end_time
                     })
