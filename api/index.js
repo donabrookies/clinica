@@ -1,9 +1,5 @@
 // ============================================
-<<<<<<< HEAD
 // BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO COM MÉDICOS E AGENDAMENTOS)
-=======
-// BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO ATUALIZADA)
->>>>>>> 2f1052a2c9b0f855ac6915d1cf50b29c32385343
 // ============================================
 
 const { createClient } = require('@supabase/supabase-js');
@@ -355,7 +351,6 @@ module.exports = async (req, res) => {
         }
         
         // ============================================
-<<<<<<< HEAD
         // ROTAS DE MÉDICOS E AGENDAMENTOS (PACIENTE)
         // ============================================
         
@@ -530,8 +525,6 @@ module.exports = async (req, res) => {
         }
         
         // ============================================
-=======
->>>>>>> 2f1052a2c9b0f855ac6915d1cf50b29c32385343
         // ROTAS DO ADMIN (PROTEGIDAS)
         // ============================================
         
@@ -764,7 +757,6 @@ module.exports = async (req, res) => {
             }
         }
         
-<<<<<<< HEAD
         // ============================================
         // ROTAS DE MÉDICOS (ADMIN)
         // ============================================
@@ -1036,8 +1028,6 @@ module.exports = async (req, res) => {
         // ROTAS DE EXCLUSÃO (ADMIN)
         // ============================================
         
-=======
->>>>>>> 2f1052a2c9b0f855ac6915d1cf50b29c32385343
         // DELETAR CONSULTA
         if (url.match(/\/api\/admin\/history\/[^/]+$/) && method === 'DELETE') {
             try {
@@ -1111,7 +1101,6 @@ module.exports = async (req, res) => {
         if (url === '/' && method === 'GET') {
             return res.status(200).json({ 
                 message: 'API do Prontuário Eletrônico',
-<<<<<<< HEAD
                 version: '2.0.0',
                 status: 'online',
                 timestamp: new Date().toISOString(),
@@ -1123,11 +1112,6 @@ module.exports = async (req, res) => {
                     exams: true,
                     consultations: true
                 },
-=======
-                version: '1.0.0',
-                status: 'online',
-                timestamp: new Date().toISOString(),
->>>>>>> 2f1052a2c9b0f855ac6915d1cf50b29c32385343
                 routes: {
                     auth: {
                         register: 'POST /api/auth/register',
@@ -1137,16 +1121,12 @@ module.exports = async (req, res) => {
                     patient: {
                         history: 'GET /api/patient/history',
                         exams: 'GET /api/patient/exams',
-<<<<<<< HEAD
                         avatar: 'POST /api/patient/avatar',
                         doctors: 'GET /api/doctors',
                         specialties: 'GET /api/specialties',
                         appointments: 'GET /api/patient/appointments',
                         createAppointment: 'POST /api/appointments',
                         cancelAppointment: 'POST /api/appointments/:id/cancel'
-=======
-                        avatar: 'POST /api/patient/avatar'
->>>>>>> 2f1052a2c9b0f855ac6915d1cf50b29c32385343
                     },
                     admin: {
                         clients: 'GET /api/admin/clients',
@@ -1156,7 +1136,6 @@ module.exports = async (req, res) => {
                         clientExams: 'GET /api/admin/clients/:id/exams',
                         addExam: 'POST /api/admin/clients/:id/exams',
                         clientAvatar: 'POST /api/admin/clients/:id/avatar',
-<<<<<<< HEAD
                         doctors: 'GET /api/admin/doctors',
                         createDoctor: 'POST /api/admin/doctors',
                         updateDoctor: 'PUT /api/admin/doctors/:id',
@@ -1166,8 +1145,6 @@ module.exports = async (req, res) => {
                         deleteWorkDay: 'DELETE /api/admin/doctor-work-days/:id',
                         appointments: 'GET /api/admin/appointments',
                         updateAppointmentStatus: 'PUT /api/admin/appointments/:id/status',
-=======
->>>>>>> 2f1052a2c9b0f855ac6915d1cf50b29c32385343
                         deleteHistory: 'DELETE /api/admin/history/:id',
                         deleteExam: 'DELETE /api/admin/exams/:id',
                         deleteClient: 'DELETE /api/admin/clients/:id'
