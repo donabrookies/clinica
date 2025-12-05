@@ -377,14 +377,18 @@ module.exports = async (req, res) => {
             try {
                 const decoded = verifyToken(req.headers.authorization);
                 
-                const { data: specialties, error } = await supabase
-                    .from('specialties')
-                    .select('*')
-                    .order('name');
+                // Como não temos tabela de especialidades, vamos buscar das descrições dos médicos
+                const { data: doctors, error } = await supabase
+                    .from('doctors')
+                    .select('specialty')
+                    .eq('active', true);
                 
                 if (error) throw error;
                 
-                return res.status(200).json(specialties || []);
+                // Extrai especialidades únicas
+                const specialties = [...new Set(doctors.map(d => d.specialty))].filter(Boolean);
+                
+                return res.status(200).json(specialties);
             } catch (error) {
                 return res.status(401).json({ error: error.message });
             }
@@ -394,7 +398,8 @@ module.exports = async (req, res) => {
         if (url.includes('/api/doctor-work-days') && method === 'GET') {
             try {
                 const decoded = verifyToken(req.headers.authorization);
-                const { doctor_id } = req.query || data;
+                const urlParams = new URLSearchParams(url.split('?')[1]);
+                const doctor_id = urlParams.get('doctor_id') || data.doctor_id;
                 
                 if (!doctor_id) {
                     return res.status(400).json({ error: 'ID do médico é obrigatório' });
@@ -459,12 +464,19 @@ module.exports = async (req, res) => {
                     .select('*')
                     .eq('doctor_id', doctor_id)
                     .eq('work_date', appointment_date)
-                    .lte('start_time', appointment_time)
-                    .gte('end_time', appointment_time)
                     .single();
                 
                 if (workDayError || !workDay) {
-                    return res.status(400).json({ error: 'Médico não trabalha neste dia/horário' });
+                    return res.status(400).json({ error: 'Médico não trabalha neste dia' });
+                }
+                
+                // Converte horários para comparar
+                const appointmentTime = new Date(`1970-01-01T${appointment_time}`);
+                const startTime = new Date(`1970-01-01T${workDay.start_time}`);
+                const endTime = new Date(`1970-01-01T${workDay.end_time}`);
+                
+                if (appointmentTime < startTime || appointmentTime >= endTime) {
+                    return res.status(400).json({ error: 'Horário fora do expediente do médico' });
                 }
                 
                 // Verifica se já existe agendamento no mesmo horário
@@ -869,7 +881,8 @@ module.exports = async (req, res) => {
         if (url.includes('/api/admin/doctor-work-days') && method === 'GET') {
             try {
                 verifyAdminToken(req.headers.authorization);
-                const { doctor_id } = req.query || data;
+                const urlParams = new URLSearchParams(url.split('?')[1]);
+                const doctor_id = urlParams.get('doctor_id') || data.doctor_id;
                 
                 if (!doctor_id) {
                     return res.status(400).json({ error: 'ID do médico é obrigatório' });
@@ -960,7 +973,9 @@ module.exports = async (req, res) => {
             try {
                 verifyAdminToken(req.headers.authorization);
                 
-                const { status, date } = req.query || {};
+                const urlParams = new URLSearchParams(url.split('?')[1]);
+                const status = urlParams.get('status');
+                const date = urlParams.get('date');
                 
                 let query = supabase
                     .from('appointments')
