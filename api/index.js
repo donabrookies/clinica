@@ -1,5 +1,5 @@
 // ============================================
-// BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO COM MÉDICOS E AGENDAMENTOS)
+// BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO COM MÉDICOS E AGENDAMENTOS E TALK API)
 // ============================================
 
 const { createClient } = require('@supabase/supabase-js');
@@ -12,6 +12,10 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 const jwtSecret = process.env.JWT_SECRET || 'seu-jwt-secret-super-seguro-aqui';
 const adminUser = process.env.ADMIN_USER || 'Admin';
 const adminPassword = process.env.ADMIN_PASSWORD || 'Admin123';
+
+// Configuração Talk API
+const TALK_API_TOKEN = "CGXCZJhajeRk6N9hcc9CUHRLZFZ3Pi";
+const TALK_API_URL = "https://talkapi.ingaja.com.br/api/messages/send";
 
 // Cria cliente do Supabase
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -75,6 +79,54 @@ async function uploadFileToStorage(bucket, path, fileBuffer, contentType) {
     } catch (error) {
         console.error('Error in uploadFileToStorage:', error);
         throw error;
+    }
+}
+
+// ============================================
+// FUNÇÃO PARA ENVIAR MENSAGENS VIA TALK API
+// ============================================
+
+async function sendTalkMessage(phone, message) {
+    try {
+        // Formata o telefone: remove caracteres não numéricos e adiciona 55
+        let formattedPhone = phone.replace(/\D/g, '');
+        if (!formattedPhone.startsWith('55')) {
+            formattedPhone = '55' + formattedPhone;
+        }
+        
+        const body = {
+            number: formattedPhone,
+            body: message,
+            userId: "",
+            queueId: "",
+            sendSignature: false,
+            closeTicket: false
+        };
+        
+        console.log('Enviando mensagem via Talk API para:', formattedPhone);
+        console.log('Mensagem:', message);
+        
+        const response = await fetch(TALK_API_URL, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${TALK_API_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+        });
+        
+        const result = await response.json();
+        console.log('Resposta do Talk API:', result);
+        
+        if (!response.ok) {
+            console.error('Erro ao enviar mensagem via Talk API:', result);
+            return false;
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('Erro na função sendTalkMessage:', error);
+        return false;
     }
 }
 
@@ -507,7 +559,7 @@ module.exports = async (req, res) => {
             }
         }
         
-        // 2. CRIAR AGENDAMENTO
+        // 2. CRIAR AGENDAMENTO (COM ENVIO DE MENSAGEM VIA TALK API)
         if (url === '/api/appointments' && method === 'POST') {
             try {
                 const decoded = verifyToken(req.headers.authorization);
@@ -564,6 +616,51 @@ module.exports = async (req, res) => {
                 if (insertError) {
                     console.error('Erro ao inserir agendamento:', insertError);
                     throw insertError;
+                }
+                
+                // ============================================
+                // ENVIO DE MENSAGEM VIA TALK API
+                // ============================================
+                try {
+                    // Buscar dados do paciente
+                    const { data: patientData, error: patientError } = await supabase
+                        .from('patients')
+                        .select('name, cpf')
+                        .eq('id', decoded.id)
+                        .single();
+                    
+                    if (!patientError && patientData) {
+                        // Buscar dados do médico
+                        const { data: doctorData, error: doctorError } = await supabase
+                            .from('doctors')
+                            .select('name')
+                            .eq('id', doctor_id)
+                            .single();
+                        
+                        // Formatar data para mensagem
+                        const dataObj = new Date(appointment_date);
+                        const dataFormatada = dataObj.toLocaleDateString('pt-BR');
+                        
+                        // Montar mensagem
+                        const cpfFormatado = patientData.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+                        const mensagem = `Olá ${patientData.name} (CPF: ${cpfFormatado}),\n\nEstamos entrando em contato para confirmar sua consulta com ${doctorData?.name || 'o médico'} no dia ${dataFormatada} às ${appointment_time}.\n\nPor favor, confirme se poderá comparecer respondendo esta mensagem.\n\nAtenciosamente,\nClínica`;
+                        
+                        // Enviar mensagem via Talk API (assincrono - não bloqueia a resposta)
+                        sendTalkMessage(whatsapp, mensagem)
+                            .then(success => {
+                                if (success) {
+                                    console.log('Mensagem de confirmação enviada com sucesso para:', whatsapp);
+                                } else {
+                                    console.log('Falha ao enviar mensagem para:', whatsapp);
+                                }
+                            })
+                            .catch(err => {
+                                console.error('Erro ao tentar enviar mensagem:', err);
+                            });
+                    }
+                } catch (talkError) {
+                    console.error('Erro no processo de envio de mensagem:', talkError);
+                    // Não falha o agendamento se a mensagem não for enviada
                 }
                 
                 return res.status(201).json(appointment);
