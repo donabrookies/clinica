@@ -1102,15 +1102,26 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // ROTAS DE DIAS DE TRABALHO (ADMIN)
+        // ROTAS DE DIAS DE TRABALHO (ADMIN) - ATUALIZADA
         // ============================================
 
-        // LISTAR DIAS DE TRABALHO
-        if (url === '/api/admin/work-days' && method === 'GET') {
+        // LISTAR DIAS DE TRABALHO COM FILTROS
+        if (url.startsWith('/api/admin/work-days') && method === 'GET') {
             try {
                 verifyAdminToken(req.headers.authorization);
 
-                const { data: workDays, error } = await supabase
+                // Parse URL para obter parâmetros de query
+                const urlParts = url.split('?');
+                const basePath = urlParts[0];
+                const queryString = urlParts[1] || '';
+                
+                // Extrair parâmetros da query
+                const params = new URLSearchParams(queryString);
+                const year = params.get('year');
+                const month = params.get('month');
+                const doctor_id = params.get('doctor_id');
+
+                let query = supabase
                     .from('doctor_work_days')
                     .select(`
                         *,
@@ -1118,14 +1129,32 @@ module.exports = async (req, res) => {
                             name,
                             specialty
                         )
-                    `)
-                    .order('work_date', { ascending: true });
+                    `);
+
+                // Aplicar filtros
+                if (year && month) {
+                    const startDate = `${year}-${month.padStart(2, '0')}-01`;
+                    const endDate = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+                    query = query.gte('work_date', startDate).lte('work_date', endDate);
+                } else {
+                    // Se não houver filtro de data, mostrar apenas datas futuras
+                    query = query.gte('work_date', new Date().toISOString().split('T')[0]);
+                }
+
+                if (doctor_id) {
+                    query = query.eq('doctor_id', doctor_id);
+                }
+
+                query = query.order('work_date', { ascending: true });
+
+                const { data: workDays, error } = await query;
 
                 if (error) throw error;
 
                 return res.status(200).json(workDays || []);
             } catch (error) {
-                return res.status(401).json({ error: error.message });
+                console.error('Erro ao carregar dias de trabalho:', error);
+                return res.status(500).json({ error: error.message });
             }
         }
 
@@ -1197,17 +1226,25 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // ROTAS DE AGENDAMENTOS (ADMIN)
+        // ROTAS DE AGENDAMENTOS (ADMIN) - ATUALIZADA
         // ============================================
 
-        // LISTAR TODOS OS AGENDAMENTOS
-        if (url === '/api/admin/appointments' && method === 'GET') {
+        // LISTAR TODOS OS AGENDAMENTOS COM FILTROS
+        if (url.startsWith('/api/admin/appointments') && method === 'GET') {
             try {
                 verifyAdminToken(req.headers.authorization);
 
-                const urlObj = new URL(`http://localhost${url}`);
-                const status = urlObj.searchParams.get('status');
-                const date = urlObj.searchParams.get('date');
+                // Parse URL para obter parâmetros de query
+                const urlParts = url.split('?');
+                const basePath = urlParts[0];
+                const queryString = urlParts[1] || '';
+                
+                // Extrair parâmetros da query
+                const params = new URLSearchParams(queryString);
+                const status = params.get('status');
+                const date = params.get('date');
+                const doctor_id = params.get('doctor_id');
+                const patient_id = params.get('patient_id');
 
                 let query = supabase
                     .from('appointments')
@@ -1224,12 +1261,20 @@ module.exports = async (req, res) => {
                         )
                     `);
 
-                if (status) {
+                if (status && status !== '') {
                     query = query.eq('status', status);
                 }
 
-                if (date) {
+                if (date && date !== '') {
                     query = query.eq('appointment_date', date);
+                }
+
+                if (doctor_id && doctor_id !== '') {
+                    query = query.eq('doctor_id', doctor_id);
+                }
+
+                if (patient_id && patient_id !== '') {
+                    query = query.eq('patient_id', patient_id);
                 }
 
                 query = query.order('appointment_date', { ascending: false })
@@ -1241,7 +1286,8 @@ module.exports = async (req, res) => {
 
                 return res.status(200).json(appointments || []);
             } catch (error) {
-                return res.status(401).json({ error: error.message });
+                console.error('Erro ao carregar agendamentos:', error);
+                return res.status(500).json({ error: error.message });
             }
         }
 
@@ -1346,6 +1392,34 @@ module.exports = async (req, res) => {
                 return res.status(200).json({ success: true });
             } catch (error) {
                 return res.status(400).json({ error: error.message });
+            }
+        }
+
+        // ROTA PARA AGENDAMENTOS DO CLIENTE (PARA O MODAL DO ADMIN)
+        if (url.includes('/api/admin/client-appointments/') && method === 'GET') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+
+                const parts = url.split('/');
+                const clientId = parts[parts.length - 1];
+
+                const { data: appointments, error } = await supabase
+                    .from('appointments')
+                    .select(`
+                        *,
+                        doctors (
+                            name,
+                            specialty
+                        )
+                    `)
+                    .eq('patient_id', clientId)
+                    .order('appointment_date', { ascending: false });
+
+                if (error) throw error;
+
+                return res.status(200).json(appointments || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
             }
         }
 
