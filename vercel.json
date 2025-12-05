@@ -10,6 +10,13 @@
     {
       "src": "/api/(.*)",
       "dest": "/api/index.js"
+<<<<<<< HEAD
+=======
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.js"
+>>>>>>> 2f1052a2c9b0f855ac6915d1cf50b29c32385343
     }
   ]
 }
