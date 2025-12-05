@@ -10,15 +10,6 @@
     {
       "src": "/api/(.*)",
       "dest": "/api/index.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/api/index.js"
     }
-  ],
-  "env": {
-    "SUPABASE_URL": "https://seu-projeto.supabase.co",
-    "SUPABASE_KEY": "sua-service-role-key-aqui",
-    "ADMIN_EMAIL": "admin@clinica.com"
-  }
+  ]
 }

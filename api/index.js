@@ -1,771 +1,1199 @@
 // ============================================
-// BACKEND CORRIGIDO PARA VERCEL
+// BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO COM MÉDICOS E AGENDAMENTOS)
 // ============================================
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@clinica.com';
+const { createClient } = require('@supabase/supabase-js');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+// Configuração do Supabase
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+const jwtSecret = process.env.JWT_SECRET || 'seu-jwt-secret-super-seguro-aqui';
+const adminUser = process.env.ADMIN_USER || 'Admin';
+const adminPassword = process.env.ADMIN_PASSWORD || 'Admin123';
+
+// Cria cliente do Supabase
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+// ============================================
+// FUNÇÕES UTILITÁRIAS
+// ============================================
+
+function setCorsHeaders(res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+function verifyToken(authHeader) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        throw new Error('Token não fornecido');
+    }
+    const token = authHeader.split(' ')[1];
+    return jwt.verify(token, jwtSecret);
+}
+
+function verifyAdminToken(authHeader) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        throw new Error('Token não fornecido');
+    }
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, jwtSecret);
+    if (!decoded.isAdmin) {
+        throw new Error('Acesso não autorizado');
+    }
+    return decoded;
+}
+
+// Função para fazer upload de arquivo para o Supabase Storage
+async function uploadFileToStorage(bucket, path, fileBuffer, contentType) {
+    try {
+        console.log(`Uploading file to ${bucket}/${path}`);
+        
+        const { data, error } = await supabase
+            .storage
+            .from(bucket)
+            .upload(path, fileBuffer, {
+                contentType: contentType,
+                upsert: true
+            });
+        
+        if (error) {
+            console.error('Upload error:', error);
+            throw error;
+        }
+        
+        // Obtém a URL pública
+        const { data: urlData } = supabase
+            .storage
+            .from(bucket)
+            .getPublicUrl(path);
+        
+        console.log('Upload successful, public URL:', urlData.publicUrl);
+        return urlData.publicUrl;
+    } catch (error) {
+        console.error('Error in uploadFileToStorage:', error);
+        throw error;
+    }
+}
+
+// ============================================
+// HANDLER PRINCIPAL
+// ============================================
 
 module.exports = async (req, res) => {
-    // Configurar CORS
-    res.setHeader('Access-Control-Allow-Credentials', true);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    // Configura CORS
+    setCorsHeaders(res);
     
-    // Lidar com preflight requests
+    // Handle CORS preflight
     if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+        res.status(200).end();
+        return;
     }
     
-    // Extrair path
-    const { method, url } = req;
-    const path = url.split('?')[0];
-    
-    console.log(`[${method}] ${path}`); // Log para debug
-    
     try {
-        // Roteamento
-        switch (path) {
-            case '/':
-            case '/api':
-                return res.json({ 
-                    api: 'Clinica Ficha Digital API', 
-                    status: 'online', 
-                    version: '1.0',
-                    endpoints: [
-                        'POST /api/login',
-                        'POST /api/registrar',
-                        'GET /api/me',
-                        'PUT /api/orientacao/:id/lida',
-                        'GET /api/admin/dashboard',
-                        'GET /api/admin/pacientes',
-                        'GET /api/admin/paciente/:id',
-                        'POST /api/admin/novo-paciente',
-                        'POST /api/admin/enviar-documento',
-                        'POST /api/admin/enviar-orientacao',
-                        'POST /api/admin/adicionar-foto',
-                        'POST /api/admin/nova-consulta',
-                        'GET /api/admin/consultas',
-                        'GET /api/admin/orientacoes'
-                    ]
-                });
-            
-            case '/api/login':
-                if (method === 'POST') return await handleLogin(req, res);
-                break;
-            
-            case '/api/registrar':
-                if (method === 'POST') return await handleRegister(req, res);
-                break;
-            
-            case '/api/me':
-                if (method === 'GET') return await handleGetMe(req, res);
-                break;
-            
-            default:
-                // Verificar rotas dinâmicas
-                if (path.startsWith('/api/orientacao/') && path.endsWith('/lida') && method === 'PUT') {
-                    return await handleMarcarLida(req, res, path);
-                }
-                
-                if (path === '/api/admin/dashboard' && method === 'GET') {
-                    return await handleAdminDashboard(req, res);
-                }
-                
-                if (path === '/api/admin/pacientes' && method === 'GET') {
-                    return await handleAdminPacientes(req, res);
-                }
-                
-                if (path.startsWith('/api/admin/paciente/') && method === 'GET') {
-                    return await handleAdminPaciente(req, res, path);
-                }
-                
-                if (path === '/api/admin/novo-paciente' && method === 'POST') {
-                    return await handleAdminNovoPaciente(req, res);
-                }
-                
-                if (path === '/api/admin/enviar-documento' && method === 'POST') {
-                    return await handleEnviarDocumento(req, res);
-                }
-                
-                if (path === '/api/admin/enviar-orientacao' && method === 'POST') {
-                    return await handleEnviarOrientacao(req, res);
-                }
-                
-                if (path === '/api/admin/adicionar-foto' && method === 'POST') {
-                    return await handleAdicionarFoto(req, res);
-                }
-                
-                if (path === '/api/admin/nova-consulta' && method === 'POST') {
-                    return await handleNovaConsulta(req, res);
-                }
-                
-                if (path === '/api/admin/consultas' && method === 'GET') {
-                    return await handleAdminConsultas(req, res);
-                }
-                
-                if (path === '/api/admin/orientacoes' && method === 'GET') {
-                    return await handleAdminOrientacoes(req, res);
-                }
-                
-                // Rota não encontrada
-                return res.status(404).json({ 
-                    error: 'Rota não encontrada',
-                    path: path,
-                    method: method
-                });
+        const url = req.url || '';
+        const method = req.method || 'GET';
+        
+        console.log(`[${method}] ${url}`);
+        
+        // Coleta o corpo da requisição
+        let body = '';
+        for await (const chunk of req) {
+            body += chunk.toString();
         }
+        
+        let data = {};
+        if (body && body.trim() !== '') {
+            try {
+                data = JSON.parse(body);
+            } catch (e) {
+                console.log('Body não é JSON, tratando como raw:', body.substring(0, 100));
+            }
+        }
+        
+        // ============================================
+        // ROTAS DE AUTENTICAÇÃO
+        // ============================================
+        
+        // CADASTRO DE PACIENTE
+        if (url.includes('/api/auth/register') && method === 'POST') {
+            console.log('Tentando cadastrar paciente:', data);
+            
+            const { name, cpf, dob, password } = data;
+            
+            // Validação básica
+            if (!name || !cpf || !dob || !password) {
+                return res.status(400).json({ 
+                    error: 'Todos os campos são obrigatórios' 
+                });
+            }
+            
+            // Limpa CPF
+            const cleanCpf = cpf.replace(/\D/g, '');
+            
+            // Verifica se CPF já existe
+            const { data: existing, error: checkError } = await supabase
+                .from('patients')
+                .select('id')
+                .eq('cpf', cleanCpf)
+                .maybeSingle();
+            
+            if (checkError) {
+                console.error('Erro ao verificar CPF:', checkError);
+                return res.status(500).json({ error: 'Erro interno do servidor' });
+            }
+            
+            if (existing) {
+                return res.status(400).json({ error: 'CPF já cadastrado' });
+            }
+            
+            // Hash da senha
+            const passwordHash = await bcrypt.hash(password, 10);
+            
+            // Insere paciente
+            const { data: newPatient, error: insertError } = await supabase
+                .from('patients')
+                .insert({
+                    name: name.trim(),
+                    cpf: cleanCpf,
+                    dob,
+                    password_hash: passwordHash
+                })
+                .select()
+                .single();
+            
+            if (insertError) {
+                console.error('Erro ao inserir paciente:', insertError);
+                return res.status(500).json({ error: 'Erro ao cadastrar paciente' });
+            }
+            
+            return res.status(201).json({ 
+                success: true, 
+                message: 'Cadastro realizado com sucesso' 
+            });
+        }
+        
+        // LOGIN DE PACIENTE
+        if (url.includes('/api/auth/login') && method === 'POST') {
+            console.log('Tentando login paciente');
+            
+            const { cpf, password } = data;
+            
+            if (!cpf || !password) {
+                return res.status(400).json({ error: 'CPF e senha são obrigatórios' });
+            }
+            
+            const cleanCpf = cpf.replace(/\D/g, '');
+            
+            const { data: patient, error } = await supabase
+                .from('patients')
+                .select('*')
+                .eq('cpf', cleanCpf)
+                .maybeSingle();
+            
+            if (error || !patient) {
+                console.error('Paciente não encontrado:', error);
+                return res.status(401).json({ error: 'CPF ou senha incorretos' });
+            }
+            
+            // Verifica senha
+            const validPassword = await bcrypt.compare(password, patient.password_hash);
+            if (!validPassword) {
+                return res.status(401).json({ error: 'CPF ou senha incorretos' });
+            }
+            
+            // Gera token
+            const token = jwt.sign(
+                { 
+                    id: patient.id, 
+                    cpf: patient.cpf,
+                    type: 'patient'
+                },
+                jwtSecret,
+                { expiresIn: '7d' }
+            );
+            
+            // Remove senha do retorno
+            const { password_hash, ...user } = patient;
+            
+            return res.status(200).json({ 
+                success: true,
+                token, 
+                user 
+            });
+        }
+        
+        // LOGIN DE ADMIN
+        if (url.includes('/api/admin/login') && method === 'POST') {
+            console.log('Tentando login admin');
+            
+            const { username, password } = data;
+            
+            if (username !== adminUser || password !== adminPassword) {
+                return res.status(401).json({ error: 'Credenciais inválidas' });
+            }
+            
+            const token = jwt.sign(
+                { isAdmin: true, type: 'admin' }, 
+                jwtSecret, 
+                { expiresIn: '24h' }
+            );
+            
+            return res.status(200).json({ 
+                success: true,
+                token 
+            });
+        }
+        
+        // ============================================
+        // ROTAS DO PACIENTE (PROTEGIDAS)
+        // ============================================
+        
+        // HISTÓRICO DO PACIENTE
+        if (url.includes('/api/patient/history') && method === 'GET') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const { data: history, error } = await supabase
+                    .from('consultations')
+                    .select('*')
+                    .eq('patient_id', decoded.id)
+                    .order('date', { ascending: false });
+                
+                if (error) throw error;
+                
+                return res.status(200).json(history || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // EXAMES DO PACIENTE
+        if (url.includes('/api/patient/exams') && method === 'GET') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const { data: exams, error } = await supabase
+                    .from('exams')
+                    .select('*')
+                    .eq('patient_id', decoded.id)
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
+                
+                return res.status(200).json(exams || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // UPLOAD DE AVATAR DO PACIENTE
+        if (url.includes('/api/patient/avatar') && method === 'POST') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                // Espera receber { avatar: base64String }
+                const { avatar } = data;
+                
+                if (!avatar) {
+                    return res.status(400).json({ error: 'Avatar é obrigatório' });
+                }
+                
+                // Verifica se é base64 válido
+                if (!avatar.startsWith('data:image/')) {
+                    return res.status(400).json({ error: 'Formato de imagem inválido' });
+                }
+                
+                // Extrai o tipo MIME da string base64
+                const matches = avatar.match(/^data:image\/(\w+);base64,/);
+                if (!matches) {
+                    return res.status(400).json({ error: 'Formato base64 inválido' });
+                }
+                
+                const mimeType = matches[1];
+                const base64Data = avatar.replace(/^data:image\/\w+;base64,/, '');
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                // Define o caminho no storage
+                const fileName = `patient-${decoded.id}-${Date.now()}.${mimeType}`;
+                const path = `avatars/${fileName}`;
+                
+                console.log(`Uploading avatar for patient ${decoded.id}, path: ${path}`);
+                
+                // Faz upload
+                const publicUrl = await uploadFileToStorage('uploads', path, buffer, `image/${mimeType}`);
+                
+                // Atualiza o paciente com a nova URL do avatar
+                const { data: updatedPatient, error: updateError } = await supabase
+                    .from('patients')
+                    .update({ avatar_url: publicUrl })
+                    .eq('id', decoded.id)
+                    .select()
+                    .single();
+                
+                if (updateError) {
+                    console.error('Error updating patient:', updateError);
+                    throw updateError;
+                }
+                
+                return res.status(200).json({ 
+                    success: true, 
+                    avatar_url: publicUrl 
+                });
+            } catch (error) {
+                console.error('Error in /api/patient/avatar:', error);
+                return res.status(500).json({ 
+                    error: 'Erro ao processar imagem: ' + error.message 
+                });
+            }
+        }
+        
+        // ============================================
+        // ROTAS DE MÉDICOS E AGENDAMENTOS (PACIENTE)
+        // ============================================
+        
+        // LISTAR MÉDICOS DISPONÍVEIS
+        if (url.includes('/api/doctors') && method === 'GET') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const { data: doctors, error } = await supabase
+                    .from('doctors')
+                    .select('*')
+                    .order('name');
+                
+                if (error) throw error;
+                
+                return res.status(200).json(doctors || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // LISTAR ESPECIALIDADES
+        if (url.includes('/api/specialties') && method === 'GET') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const { data: specialties, error } = await supabase
+                    .from('specialties')
+                    .select('*')
+                    .order('name');
+                
+                if (error) throw error;
+                
+                return res.status(200).json(specialties || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // LISTAR DIAS DE TRABALHO DO MÉDICO
+        if (url.includes('/api/doctor-work-days') && method === 'GET') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                const { doctor_id } = req.query || data;
+                
+                if (!doctor_id) {
+                    return res.status(400).json({ error: 'ID do médico é obrigatório' });
+                }
+                
+                const { data: workDays, error } = await supabase
+                    .from('doctor_work_days')
+                    .select('*')
+                    .eq('doctor_id', doctor_id)
+                    .gte('work_date', new Date().toISOString().split('T')[0])
+                    .order('work_date');
+                
+                if (error) throw error;
+                
+                return res.status(200).json(workDays || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // LISTAR AGENDAMENTOS DO PACIENTE
+        if (url.includes('/api/patient/appointments') && method === 'GET') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const { data: appointments, error } = await supabase
+                    .from('appointments')
+                    .select(`
+                        *,
+                        doctors (
+                            name,
+                            specialty
+                        )
+                    `)
+                    .eq('patient_id', decoded.id)
+                    .gte('appointment_date', new Date().toISOString().split('T')[0])
+                    .order('appointment_date')
+                    .order('appointment_time');
+                
+                if (error) throw error;
+                
+                return res.status(200).json(appointments || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // CRIAR AGENDAMENTO
+        if (url.includes('/api/appointments') && method === 'POST') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const { doctor_id, appointment_date, appointment_time, notes } = data;
+                
+                if (!doctor_id || !appointment_date || !appointment_time) {
+                    return res.status(400).json({ error: 'Médico, data e horário são obrigatórios' });
+                }
+                
+                // Verifica se o médico trabalha nesse dia e horário
+                const { data: workDay, error: workDayError } = await supabase
+                    .from('doctor_work_days')
+                    .select('*')
+                    .eq('doctor_id', doctor_id)
+                    .eq('work_date', appointment_date)
+                    .lte('start_time', appointment_time)
+                    .gte('end_time', appointment_time)
+                    .single();
+                
+                if (workDayError || !workDay) {
+                    return res.status(400).json({ error: 'Médico não trabalha neste dia/horário' });
+                }
+                
+                // Verifica se já existe agendamento no mesmo horário
+                const { data: existingAppointment, error: checkError } = await supabase
+                    .from('appointments')
+                    .select('id')
+                    .eq('doctor_id', doctor_id)
+                    .eq('appointment_date', appointment_date)
+                    .eq('appointment_time', appointment_time)
+                    .eq('status', 'agendado')
+                    .maybeSingle();
+                
+                if (existingAppointment) {
+                    return res.status(400).json({ error: 'Horário já agendado' });
+                }
+                
+                // Cria o agendamento
+                const { data: appointment, error: insertError } = await supabase
+                    .from('appointments')
+                    .insert({
+                        patient_id: decoded.id,
+                        doctor_id,
+                        appointment_date,
+                        appointment_time,
+                        notes: notes || '',
+                        status: 'agendado'
+                    })
+                    .select()
+                    .single();
+                
+                if (insertError) throw insertError;
+                
+                return res.status(201).json(appointment);
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // CANCELAR AGENDAMENTO
+        if (url.match(/\/api\/appointments\/[^/]+\/cancel$/) && method === 'POST') {
+            try {
+                const decoded = verifyToken(req.headers.authorization);
+                
+                const appointmentId = url.split('/')[3];
+                
+                const { error } = await supabase
+                    .from('appointments')
+                    .update({ status: 'cancelado' })
+                    .eq('id', appointmentId)
+                    .eq('patient_id', decoded.id);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // ============================================
+        // ROTAS DO ADMIN (PROTEGIDAS)
+        // ============================================
+        
+        // LISTAR TODOS OS CLIENTES
+        if (url.includes('/api/admin/clients') && method === 'GET' && !url.includes('/clients/')) {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const { data: clients, error } = await supabase
+                    .from('patients')
+                    .select('id, name, cpf, dob, avatar_url, created_at')
+                    .order('name');
+                
+                if (error) throw error;
+                
+                return res.status(200).json(clients || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // DETALHES DE UM CLIENTE
+        if (url.match(/\/api\/admin\/clients\/[^/]+$/) && method === 'GET') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const clientId = url.split('/').pop();
+                
+                const { data: client, error } = await supabase
+                    .from('patients')
+                    .select('id, name, cpf, dob, avatar_url, created_at')
+                    .eq('id', clientId)
+                    .single();
+                
+                if (error) throw error;
+                
+                return res.status(200).json(client);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // HISTÓRICO DE UM CLIENTE
+        if (url.match(/\/api\/admin\/clients\/[^/]+\/history$/) && method === 'GET') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const parts = url.split('/');
+                const clientId = parts[parts.length - 2];
+                
+                const { data: history, error } = await supabase
+                    .from('consultations')
+                    .select('*')
+                    .eq('patient_id', clientId)
+                    .order('date', { ascending: false });
+                
+                if (error) throw error;
+                
+                return res.status(200).json(history || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // ADICIONAR CONSULTA
+        if (url.match(/\/api\/admin\/clients\/[^/]+\/history$/) && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const parts = url.split('/');
+                const clientId = parts[parts.length - 2];
+                const { date, time, type, notes } = data;
+                
+                if (!date || !type) {
+                    return res.status(400).json({ error: 'Data e tipo são obrigatórios' });
+                }
+                
+                const { data: consultation, error } = await supabase
+                    .from('consultations')
+                    .insert({
+                        patient_id: clientId,
+                        date,
+                        time: time || '00:00',
+                        type,
+                        notes: notes || ''
+                    })
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                
+                return res.status(201).json(consultation);
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // EXAMES DE UM CLIENTE
+        if (url.match(/\/api\/admin\/clients\/[^/]+\/exams$/) && method === 'GET') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const parts = url.split('/');
+                const clientId = parts[parts.length - 2];
+                
+                const { data: exams, error } = await supabase
+                    .from('exams')
+                    .select('*')
+                    .eq('patient_id', clientId)
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
+                
+                return res.status(200).json(exams || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // ADICIONAR EXAME (com upload de arquivo base64)
+        if (url.match(/\/api\/admin\/clients\/[^/]+\/exams$/) && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const parts = url.split('/');
+                const clientId = parts[parts.length - 2];
+                const { type, file } = data; // file é base64
+                
+                if (!type || !file) {
+                    return res.status(400).json({ error: 'Tipo e arquivo são obrigatórios' });
+                }
+                
+                // Verifica se é base64 válido
+                if (!file.startsWith('data:application/pdf;base64,')) {
+                    return res.status(400).json({ error: 'Formato de arquivo inválido. Apenas PDF são aceitos.' });
+                }
+                
+                // Converte base64 para buffer
+                const base64Data = file.replace(/^data:application\/pdf;base64,/, '');
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                // Define o caminho no storage
+                const fileName = `${type.replace(/\s+/g, '-').toLowerCase()}-${clientId}-${Date.now()}.pdf`;
+                const path = `exams/${fileName}`;
+                
+                console.log(`Uploading exam for client ${clientId}, path: ${path}`);
+                
+                // Faz upload
+                const publicUrl = await uploadFileToStorage('uploads', path, buffer, 'application/pdf');
+                
+                // Insere o exame no banco
+                const { data: exam, error: insertError } = await supabase
+                    .from('exams')
+                    .insert({
+                        patient_id: clientId,
+                        type,
+                        file_url: publicUrl
+                    })
+                    .select()
+                    .single();
+                
+                if (insertError) throw insertError;
+                
+                return res.status(201).json(exam);
+            } catch (error) {
+                console.error('Error uploading exam:', error);
+                return res.status(500).json({ error: 'Erro ao enviar exame: ' + error.message });
+            }
+        }
+        
+        // UPLOAD DE AVATAR DO CLIENTE PELO ADMIN
+        if (url.match(/\/api\/admin\/clients\/[^/]+\/avatar$/) && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const parts = url.split('/');
+                const clientId = parts[parts.length - 2];
+                const { avatar } = data;
+                
+                if (!avatar) {
+                    return res.status(400).json({ error: 'Avatar é obrigatório' });
+                }
+                
+                // Verifica se é base64 válido
+                if (!avatar.startsWith('data:image/')) {
+                    return res.status(400).json({ error: 'Formato de imagem inválido' });
+                }
+                
+                // Extrai o tipo MIME da string base64
+                const matches = avatar.match(/^data:image\/(\w+);base64,/);
+                if (!matches) {
+                    return res.status(400).json({ error: 'Formato base64 inválido' });
+                }
+                
+                const mimeType = matches[1];
+                const base64Data = avatar.replace(/^data:image\/\w+;base64,/, '');
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                // Define o caminho no storage
+                const fileName = `patient-${clientId}-${Date.now()}.${mimeType}`;
+                const path = `avatars/${fileName}`;
+                
+                console.log(`Uploading avatar for client ${clientId}, path: ${path}`);
+                
+                // Faz upload
+                const publicUrl = await uploadFileToStorage('uploads', path, buffer, `image/${mimeType}`);
+                
+                // Atualiza o paciente com a nova URL do avatar
+                const { data: updatedPatient, error: updateError } = await supabase
+                    .from('patients')
+                    .update({ avatar_url: publicUrl })
+                    .eq('id', clientId)
+                    .select()
+                    .single();
+                
+                if (updateError) {
+                    console.error('Error updating patient:', updateError);
+                    throw updateError;
+                }
+                
+                return res.status(200).json({ 
+                    success: true, 
+                    avatar_url: publicUrl 
+                });
+            } catch (error) {
+                console.error('Error in /api/admin/clients/avatar:', error);
+                return res.status(500).json({ 
+                    error: 'Erro ao processar imagem: ' + error.message 
+                });
+            }
+        }
+        
+        // ============================================
+        // ROTAS DE MÉDICOS (ADMIN)
+        // ============================================
+        
+        // LISTAR TODOS OS MÉDICOS
+        if (url.includes('/api/admin/doctors') && method === 'GET' && !url.includes('/doctors/')) {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const { data: doctors, error } = await supabase
+                    .from('doctors')
+                    .select('*')
+                    .order('name');
+                
+                if (error) throw error;
+                
+                return res.status(200).json(doctors || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // CRIAR MÉDICO
+        if (url.includes('/api/admin/doctors') && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const { name, specialty, description, phone, email } = data;
+                
+                if (!name || !specialty) {
+                    return res.status(400).json({ error: 'Nome e especialidade são obrigatórios' });
+                }
+                
+                const { data: doctor, error } = await supabase
+                    .from('doctors')
+                    .insert({
+                        name,
+                        specialty,
+                        description: description || '',
+                        phone: phone || '',
+                        email: email || '',
+                        active: true
+                    })
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                
+                return res.status(201).json(doctor);
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // ATUALIZAR MÉDICO
+        if (url.match(/\/api\/admin\/doctors\/[^/]+$/) && method === 'PUT') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const doctorId = url.split('/').pop();
+                const { name, specialty, description, phone, email, active } = data;
+                
+                const { data: doctor, error } = await supabase
+                    .from('doctors')
+                    .update({
+                        name,
+                        specialty,
+                        description,
+                        phone,
+                        email,
+                        active
+                    })
+                    .eq('id', doctorId)
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                
+                return res.status(200).json(doctor);
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // DELETAR MÉDICO
+        if (url.match(/\/api\/admin\/doctors\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const doctorId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('doctors')
+                    .delete()
+                    .eq('id', doctorId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // ============================================
+        // ROTAS DE DIAS DE TRABALHO (ADMIN)
+        // ============================================
+        
+        // LISTAR DIAS DE TRABALHO DO MÉDICO
+        if (url.includes('/api/admin/doctor-work-days') && method === 'GET') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                const { doctor_id } = req.query || data;
+                
+                if (!doctor_id) {
+                    return res.status(400).json({ error: 'ID do médico é obrigatório' });
+                }
+                
+                const { data: workDays, error } = await supabase
+                    .from('doctor_work_days')
+                    .select('*')
+                    .eq('doctor_id', doctor_id)
+                    .order('work_date');
+                
+                if (error) throw error;
+                
+                return res.status(200).json(workDays || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // ADICIONAR DIA DE TRABALHO
+        if (url.includes('/api/admin/doctor-work-days') && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const { doctor_id, work_date, start_time, end_time } = data;
+                
+                if (!doctor_id || !work_date || !start_time || !end_time) {
+                    return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
+                }
+                
+                // Verifica se já existe dia de trabalho para este médico na mesma data
+                const { data: existing, error: checkError } = await supabase
+                    .from('doctor_work_days')
+                    .select('id')
+                    .eq('doctor_id', doctor_id)
+                    .eq('work_date', work_date)
+                    .maybeSingle();
+                
+                if (existing) {
+                    return res.status(400).json({ error: 'Já existe um dia de trabalho para esta data' });
+                }
+                
+                const { data: workDay, error } = await supabase
+                    .from('doctor_work_days')
+                    .insert({
+                        doctor_id,
+                        work_date,
+                        start_time,
+                        end_time
+                    })
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                
+                return res.status(201).json(workDay);
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // DELETAR DIA DE TRABALHO
+        if (url.match(/\/api\/admin\/doctor-work-days\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const workDayId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('doctor_work_days')
+                    .delete()
+                    .eq('id', workDayId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // ============================================
+        // ROTAS DE AGENDAMENTOS (ADMIN)
+        // ============================================
+        
+        // LISTAR TODOS OS AGENDAMENTOS
+        if (url.includes('/api/admin/appointments') && method === 'GET') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const { status, date } = req.query || {};
+                
+                let query = supabase
+                    .from('appointments')
+                    .select(`
+                        *,
+                        patients (
+                            name,
+                            cpf
+                        ),
+                        doctors (
+                            name,
+                            specialty
+                        )
+                    `);
+                
+                if (status) {
+                    query = query.eq('status', status);
+                }
+                
+                if (date) {
+                    query = query.eq('appointment_date', date);
+                }
+                
+                query = query.order('appointment_date')
+                           .order('appointment_time');
+                
+                const { data: appointments, error } = await query;
+                
+                if (error) throw error;
+                
+                return res.status(200).json(appointments || []);
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+        
+        // ATUALIZAR STATUS DO AGENDAMENTO
+        if (url.match(/\/api\/admin\/appointments\/[^/]+\/status$/) && method === 'PUT') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const appointmentId = url.split('/')[3];
+                const { status } = data;
+                
+                if (!status) {
+                    return res.status(400).json({ error: 'Status é obrigatório' });
+                }
+                
+                const { data: appointment, error } = await supabase
+                    .from('appointments')
+                    .update({ status })
+                    .eq('id', appointmentId)
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                
+                return res.status(200).json(appointment);
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // ============================================
+        // ROTAS DE EXCLUSÃO (ADMIN)
+        // ============================================
+        
+        // DELETAR CONSULTA
+        if (url.match(/\/api\/admin\/history\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const historyId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('consultations')
+                    .delete()
+                    .eq('id', historyId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // DELETAR EXAME
+        if (url.match(/\/api\/admin\/exams\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const examId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('exams')
+                    .delete()
+                    .eq('id', examId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // DELETAR CLIENTE
+        if (url.match(/\/api\/admin\/clients\/[^/]+$/) && method === 'DELETE') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const clientId = url.split('/').pop();
+                
+                const { error } = await supabase
+                    .from('patients')
+                    .delete()
+                    .eq('id', clientId);
+                
+                if (error) throw error;
+                
+                return res.status(200).json({ success: true });
+            } catch (error) {
+                return res.status(400).json({ error: error.message });
+            }
+        }
+        
+        // ROTA DE TESTE
+        if (url === '/api/test' || url === '/api') {
+            return res.status(200).json({ 
+                message: 'API está funcionando',
+                timestamp: new Date().toISOString(),
+                environment: 'production'
+            });
+        }
+        
+        // ROTA RAIZ - Health Check
+        if (url === '/' && method === 'GET') {
+            return res.status(200).json({ 
+                message: 'API do Prontuário Eletrônico',
+                version: '2.0.0',
+                status: 'online',
+                timestamp: new Date().toISOString(),
+                features: {
+                    auth: true,
+                    patients: true,
+                    doctors: true,
+                    appointments: true,
+                    exams: true,
+                    consultations: true
+                },
+                routes: {
+                    auth: {
+                        register: 'POST /api/auth/register',
+                        login: 'POST /api/auth/login',
+                        adminLogin: 'POST /api/admin/login'
+                    },
+                    patient: {
+                        history: 'GET /api/patient/history',
+                        exams: 'GET /api/patient/exams',
+                        avatar: 'POST /api/patient/avatar',
+                        doctors: 'GET /api/doctors',
+                        specialties: 'GET /api/specialties',
+                        appointments: 'GET /api/patient/appointments',
+                        createAppointment: 'POST /api/appointments',
+                        cancelAppointment: 'POST /api/appointments/:id/cancel'
+                    },
+                    admin: {
+                        clients: 'GET /api/admin/clients',
+                        clientDetail: 'GET /api/admin/clients/:id',
+                        clientHistory: 'GET /api/admin/clients/:id/history',
+                        addHistory: 'POST /api/admin/clients/:id/history',
+                        clientExams: 'GET /api/admin/clients/:id/exams',
+                        addExam: 'POST /api/admin/clients/:id/exams',
+                        clientAvatar: 'POST /api/admin/clients/:id/avatar',
+                        doctors: 'GET /api/admin/doctors',
+                        createDoctor: 'POST /api/admin/doctors',
+                        updateDoctor: 'PUT /api/admin/doctors/:id',
+                        deleteDoctor: 'DELETE /api/admin/doctors/:id',
+                        workDays: 'GET /api/admin/doctor-work-days',
+                        addWorkDay: 'POST /api/admin/doctor-work-days',
+                        deleteWorkDay: 'DELETE /api/admin/doctor-work-days/:id',
+                        appointments: 'GET /api/admin/appointments',
+                        updateAppointmentStatus: 'PUT /api/admin/appointments/:id/status',
+                        deleteHistory: 'DELETE /api/admin/history/:id',
+                        deleteExam: 'DELETE /api/admin/exams/:id',
+                        deleteClient: 'DELETE /api/admin/clients/:id'
+                    }
+                }
+            });
+        }
+        
+        // TESTE DE CONEXÃO COM SUPABASE
+        if (url === '/api/health' && method === 'GET') {
+            try {
+                // Testa conexão com Supabase
+                const { data, error } = await supabase
+                    .from('patients')
+                    .select('count')
+                    .limit(1);
+                
+                return res.status(200).json({
+                    status: 'healthy',
+                    supabase: error ? 'connection_error' : 'connected',
+                    timestamp: new Date().toISOString(),
+                    environment: {
+                        supabase_url: supabaseUrl ? 'configured' : 'missing',
+                        jwt_secret: jwtSecret ? 'configured' : 'default',
+                        admin_user: adminUser ? 'configured' : 'default'
+                    }
+                });
+            } catch (error) {
+                return res.status(500).json({
+                    status: 'unhealthy',
+                    error: error.message,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+        
+        // ROTA NÃO ENCONTRADA
+        console.log('Rota não encontrada:', url);
+        return res.status(404).json({ 
+            error: 'Rota não encontrada',
+            path: url,
+            method: method
+        });
+        
     } catch (error) {
-        console.error('Erro no servidor:', error);
+        console.error('Erro interno do servidor:', error);
         return res.status(500).json({ 
             error: 'Erro interno do servidor',
-            message: error.message 
+            message: error.message
         });
     }
 };
-
-// ========== FUNÇÕES AUXILIARES ==========
-
-async function fetchSupabase(endpoint, options = {}) {
-    const url = `${SUPABASE_URL}/rest/v1/${endpoint}`;
-    console.log(`Fetching Supabase: ${url}`);
-    
-    const response = await fetch(url, {
-        ...options,
-        headers: {
-            'Content-Type': 'application/json',
-            'apikey': SUPABASE_KEY,
-            'Authorization': `Bearer ${SUPABASE_KEY}`,
-            ...options.headers
-        }
-    });
-    
-    if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Supabase error: ${response.status} - ${error}`);
-    }
-    
-    return response.json();
-}
-
-async function authSupabase(endpoint, options = {}) {
-    const url = `${SUPABASE_URL}/auth/v1/${endpoint}`;
-    console.log(`Auth Supabase: ${url}`);
-    
-    const response = await fetch(url, {
-        ...options,
-        headers: {
-            'Content-Type': 'application/json',
-            'apikey': SUPABASE_KEY,
-            ...options.headers
-        }
-    });
-    
-    if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Auth error: ${response.status} - ${error}`);
-    }
-    
-    return response.json();
-}
-
-async function verifyToken(token) {
-    try {
-        const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'apikey': SUPABASE_KEY
-            }
-        });
-        
-        if (!response.ok) {
-            console.log(`Token verification failed: ${response.status}`);
-            return null;
-        }
-        
-        const data = await response.json();
-        return data.user;
-    } catch (error) {
-        console.error('Token verification error:', error);
-        return null;
-    }
-}
-
-async function obterPacienteId(userId) {
-    try {
-        const [paciente] = await fetchSupabase(`pacientes?user_id=eq.${userId}&select=id`);
-        return paciente ? paciente.id : null;
-    } catch (error) {
-        console.error('Erro ao obter paciente ID:', error);
-        return null;
-    }
-}
-
-async function verifyAdmin(req) {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) {
-        console.log('Token ausente');
-        return { valid: false, error: 'Token ausente' };
-    }
-    
-    const user = await verifyToken(token);
-    if (!user) {
-        console.log('Token inválido');
-        return { valid: false, error: 'Token inválido' };
-    }
-    
-    if (user.email !== ADMIN_EMAIL) {
-        console.log(`Acesso negado para: ${user.email}`);
-        return { valid: false, error: 'Acesso negado. Apenas admin.' };
-    }
-    
-    return { valid: true, user };
-}
-
-// ========== HANDLERS ==========
-
-async function handleLogin(req, res) {
-    console.log('Handling login');
-    
-    let body;
-    try {
-        body = await parseBody(req);
-        console.log('Login body:', body);
-    } catch (error) {
-        return res.status(400).json({ error: 'Erro ao parsear body' });
-    }
-    
-    const { email, password } = body;
-    
-    if (!email || !password) {
-        return res.status(400).json({ error: 'Email e senha são obrigatórios' });
-    }
-    
-    try {
-        // Autenticar no Supabase
-        const authData = await authSupabase('token?grant_type=password', {
-            method: 'POST',
-            body: JSON.stringify({ email, password })
-        });
-        
-        console.log('Auth response:', authData.user ? 'Success' : 'Failed');
-        
-        if (!authData.user) {
-            return res.status(401).json({ error: 'Credenciais inválidas' });
-        }
-        
-        // Buscar paciente
-        const pacientes = await fetchSupabase(`pacientes?user_id=eq.${authData.user.id}&select=*`);
-        const paciente = pacientes[0] || null;
-        
-        return res.json({
-            success: true,
-            user: authData.user,
-            paciente: paciente,
-            token: authData.access_token
-        });
-    } catch (error) {
-        console.error('Login error:', error);
-        return res.status(400).json({ 
-            error: 'Erro ao fazer login',
-            details: error.message 
-        });
-    }
-}
-
-async function handleRegister(req, res) {
-    console.log('Handling register');
-    
-    let body;
-    try {
-        body = await parseBody(req);
-        console.log('Register body:', body);
-    } catch (error) {
-        return res.status(400).json({ error: 'Erro ao parsear body' });
-    }
-    
-    const { email, password, nome, telefone, data_nascimento } = body;
-    
-    if (!email || !password || !nome) {
-        return res.status(400).json({ error: 'Email, senha e nome são obrigatórios' });
-    }
-    
-    try {
-        // Registrar usuário
-        const authData = await authSupabase('signup', {
-            method: 'POST',
-            body: JSON.stringify({ 
-                email, 
-                password, 
-                data: { nome } 
-            })
-        });
-        
-        console.log('Signup response:', authData.user ? 'Success' : 'Failed');
-        
-        if (!authData.user) {
-            return res.status(400).json({ error: 'Erro ao criar usuário' });
-        }
-        
-        // Criar paciente
-        await fetchSupabase('pacientes', {
-            method: 'POST',
-            body: JSON.stringify([{
-                user_id: authData.user.id,
-                nome,
-                email,
-                telefone,
-                data_nascimento
-            }])
-        });
-        
-        return res.json({
-            success: true,
-            message: 'Registro realizado!',
-            user: authData.user
-        });
-    } catch (error) {
-        console.error('Register error:', error);
-        return res.status(400).json({ 
-            error: 'Erro ao registrar usuário',
-            details: error.message 
-        });
-    }
-}
-
-async function handleGetMe(req, res) {
-    console.log('Handling getMe');
-    
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Token ausente' });
-    
-    const user = await verifyToken(token);
-    if (!user) return res.status(401).json({ error: 'Token inválido' });
-    
-    const pacienteId = await obterPacienteId(user.id);
-    if (!pacienteId) return res.status(404).json({ error: 'Paciente não encontrado' });
-    
-    try {
-        // Buscar todos os dados em paralelo
-        const [pacientes, consultas, documentos, fotos, orientacoes] = await Promise.all([
-            fetchSupabase(`pacientes?user_id=eq.${user.id}&select=*`),
-            fetchSupabase(`consultas?paciente_id=eq.${pacienteId}&select=*&order=data.desc`),
-            fetchSupabase(`documentos?paciente_id=eq.${pacienteId}&select=*&order=created_at.desc`),
-            fetchSupabase(`fotos?paciente_id=eq.${pacienteId}&select=*&order=data.desc`),
-            fetchSupabase(`orientacoes?paciente_id=eq.${pacienteId}&select=*&order=created_at.desc`)
-        ]);
-        
-        return res.json({
-            paciente: pacientes[0] || null,
-            consultas: consultas || [],
-            documentos: documentos || [],
-            fotos: fotos || [],
-            orientacoes: orientacoes || []
-        });
-    } catch (error) {
-        console.error('GetMe error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao buscar dados',
-            details: error.message 
-        });
-    }
-}
-
-async function handleMarcarLida(req, res, path) {
-    console.log('Handling marcarLida:', path);
-    
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Token ausente' });
-    
-    const user = await verifyToken(token);
-    if (!user) return res.status(401).json({ error: 'Token inválido' });
-    
-    const id = path.split('/')[3]; // /api/orientacao/{id}/lida
-    
-    try {
-        await fetchSupabase(`orientacoes?id=eq.${id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ lida: true })
-        });
-        
-        return res.json({ success: true });
-    } catch (error) {
-        console.error('MarcarLida error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao marcar como lida',
-            details: error.message 
-        });
-    }
-}
-
-// ========== HANDLERS ADMIN ==========
-
-async function handleAdminDashboard(req, res) {
-    console.log('Handling admin dashboard');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    try {
-        // Buscar estatísticas
-        const [pacientes, documentos, consultas, fotos] = await Promise.all([
-            fetchSupabase('pacientes?select=count'),
-            fetchSupabase('documentos?select=count'),
-            fetchSupabase('consultas?select=count'),
-            fetchSupabase('fotos?select=count')
-        ]);
-        
-        // Atividade recente
-        const orientacoes = await fetchSupabase('orientacoes?select=*,pacientes(nome)&order=created_at.desc&limit=10');
-        
-        return res.json({
-            totalPacientes: pacientes[0]?.count || 0,
-            totalDocumentos: documentos[0]?.count || 0,
-            totalConsultas: consultas[0]?.count || 0,
-            totalFotos: fotos[0]?.count || 0,
-            atividade: orientacoes.map(o => ({
-                titulo: `Orientação para ${o.pacientes?.nome || 'Paciente'}`,
-                descricao: o.titulo,
-                data: new Date(o.created_at).toLocaleDateString('pt-BR')
-            }))
-        });
-    } catch (error) {
-        console.error('Admin dashboard error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao buscar dashboard',
-            details: error.message 
-        });
-    }
-}
-
-async function handleAdminPacientes(req, res) {
-    console.log('Handling admin pacientes');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    try {
-        const pacientes = await fetchSupabase('pacientes?select=*&order=nome.asc');
-        return res.json(pacientes);
-    } catch (error) {
-        console.error('Admin pacientes error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao buscar pacientes',
-            details: error.message 
-        });
-    }
-}
-
-async function handleAdminPaciente(req, res, path) {
-    console.log('Handling admin paciente:', path);
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    const id = path.split('/')[4]; // /api/admin/paciente/{id}
-    
-    try {
-        const [paciente, consultas, documentos, fotos, orientacoes] = await Promise.all([
-            fetchSupabase(`pacientes?id=eq.${id}&select=*`),
-            fetchSupabase(`consultas?paciente_id=eq.${id}&select=*&order=data.desc&limit=10`),
-            fetchSupabase(`documentos?paciente_id=eq.${id}&select=*&order=created_at.desc&limit=10`),
-            fetchSupabase(`fotos?paciente_id=eq.${id}&select=*&order=data.desc&limit=10`),
-            fetchSupabase(`orientacoes?paciente_id=eq.${id}&select=*&order=created_at.desc&limit=10`)
-        ]);
-        
-        return res.json({
-            paciente: paciente[0] || null,
-            consultas: consultas || [],
-            documentos: documentos || [],
-            fotos: fotos || [],
-            orientacoes: orientacoes || []
-        });
-    } catch (error) {
-        console.error('Admin paciente error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao buscar paciente',
-            details: error.message 
-        });
-    }
-}
-
-async function handleAdminNovoPaciente(req, res) {
-    console.log('Handling admin novo paciente');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    let body;
-    try {
-        body = await parseBody(req);
-    } catch (error) {
-        return res.status(400).json({ error: 'Erro ao parsear body' });
-    }
-    
-    const { email, password, nome, telefone, data_nascimento } = body;
-    
-    if (!email || !password || !nome) {
-        return res.status(400).json({ error: 'Email, senha e nome são obrigatórios' });
-    }
-    
-    try {
-        // Registrar usuário
-        const authData = await authSupabase('signup', {
-            method: 'POST',
-            body: JSON.stringify({ email, password, data: { nome } })
-        });
-        
-        if (!authData.user) {
-            return res.status(400).json({ error: 'Erro ao criar usuário' });
-        }
-        
-        // Criar paciente
-        await fetchSupabase('pacientes', {
-            method: 'POST',
-            body: JSON.stringify([{
-                user_id: authData.user.id,
-                nome,
-                email,
-                telefone,
-                data_nascimento
-            }])
-        });
-        
-        return res.json({
-            success: true,
-            message: 'Paciente cadastrado com sucesso!',
-            userId: authData.user.id
-        });
-    } catch (error) {
-        console.error('Admin novo paciente error:', error);
-        return res.status(400).json({ 
-            error: 'Erro ao cadastrar paciente',
-            details: error.message 
-        });
-    }
-}
-
-async function handleEnviarDocumento(req, res) {
-    console.log('Handling enviar documento');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    let body;
-    try {
-        body = await parseBody(req);
-    } catch (error) {
-        return res.status(400).json({ error: 'Erro ao parsear body' });
-    }
-    
-    const { paciente_id, nome, tipo, url } = body;
-    
-    if (!paciente_id || !nome || !url) {
-        return res.status(400).json({ error: 'Preencha todos os campos obrigatórios' });
-    }
-    
-    try {
-        const [documento] = await fetchSupabase('documentos', {
-            method: 'POST',
-            body: JSON.stringify([{
-                paciente_id,
-                nome,
-                tipo,
-                url,
-                data: new Date().toISOString().split('T')[0]
-            }])
-        });
-        
-        return res.json(documento || { id: Date.now() });
-    } catch (error) {
-        console.error('Enviar documento error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao enviar documento',
-            details: error.message 
-        });
-    }
-}
-
-async function handleEnviarOrientacao(req, res) {
-    console.log('Handling enviar orientacao');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    let body;
-    try {
-        body = await parseBody(req);
-    } catch (error) {
-        return res.status(400).json({ error: 'Erro ao parsear body' });
-    }
-    
-    const { paciente_id, titulo, conteudo } = body;
-    
-    if (!paciente_id || !titulo || !conteudo) {
-        return res.status(400).json({ error: 'Preencha todos os campos obrigatórios' });
-    }
-    
-    try {
-        const [orientacao] = await fetchSupabase('orientacoes', {
-            method: 'POST',
-            body: JSON.stringify([{
-                paciente_id,
-                titulo,
-                conteudo,
-                lida: false
-            }])
-        });
-        
-        return res.json(orientacao || { id: Date.now() });
-    } catch (error) {
-        console.error('Enviar orientacao error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao enviar orientação',
-            details: error.message 
-        });
-    }
-}
-
-async function handleAdicionarFoto(req, res) {
-    console.log('Handling adicionar foto');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    let body;
-    try {
-        body = await parseBody(req);
-    } catch (error) {
-        return res.status(400).json({ error: 'Erro ao parsear body' });
-    }
-    
-    const { paciente_id, tipo, url, tratamento, data, observacoes } = body;
-    
-    if (!paciente_id || !url) {
-        return res.status(400).json({ error: 'Preencha os campos obrigatórios' });
-    }
-    
-    try {
-        const [foto] = await fetchSupabase('fotos', {
-            method: 'POST',
-            body: JSON.stringify([{
-                paciente_id,
-                tipo,
-                url,
-                tratamento,
-                observacoes,
-                data: data || new Date().toISOString().split('T')[0]
-            }])
-        });
-        
-        return res.json(foto || { id: Date.now() });
-    } catch (error) {
-        console.error('Adicionar foto error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao adicionar foto',
-            details: error.message 
-        });
-    }
-}
-
-async function handleNovaConsulta(req, res) {
-    console.log('Handling nova consulta');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    let body;
-    try {
-        body = await parseBody(req);
-    } catch (error) {
-        return res.status(400).json({ error: 'Erro ao parsear body' });
-    }
-    
-    const { paciente_id, data, tipo, observacoes } = body;
-    
-    if (!paciente_id || !data || !tipo) {
-        return res.status(400).json({ error: 'Preencha os campos obrigatórios' });
-    }
-    
-    try {
-        const [consulta] = await fetchSupabase('consultas', {
-            method: 'POST',
-            body: JSON.stringify([{
-                paciente_id,
-                data,
-                tipo,
-                observacoes
-            }])
-        });
-        
-        return res.json(consulta || { id: Date.now() });
-    } catch (error) {
-        console.error('Nova consulta error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao registrar consulta',
-            details: error.message 
-        });
-    }
-}
-
-async function handleAdminConsultas(req, res) {
-    console.log('Handling admin consultas');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    try {
-        const consultas = await fetchSupabase('consultas?select=*,pacientes(nome)&order=data.desc&limit=50');
-        
-        return res.json(consultas.map(c => ({
-            ...c,
-            paciente_nome: c.pacientes?.nome
-        })));
-    } catch (error) {
-        console.error('Admin consultas error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao buscar consultas',
-            details: error.message 
-        });
-    }
-}
-
-async function handleAdminOrientacoes(req, res) {
-    console.log('Handling admin orientacoes');
-    
-    const admin = await verifyAdmin(req);
-    if (!admin.valid) return res.status(403).json({ error: admin.error });
-    
-    try {
-        const orientacoes = await fetchSupabase('orientacoes?select=*,pacientes(nome)&order=created_at.desc&limit=50');
-        
-        return res.json(orientacoes.map(o => ({
-            ...o,
-            paciente_nome: o.pacientes?.nome
-        })));
-    } catch (error) {
-        console.error('Admin orientacoes error:', error);
-        return res.status(500).json({ 
-            error: 'Erro ao buscar orientações',
-            details: error.message 
-        });
-    }
-}
-
-// Função para parsear body
-async function parseBody(req) {
-    return new Promise((resolve, reject) => {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', () => {
-            try {
-                resolve(JSON.parse(body || '{}'));
-            } catch (error) {
-                console.error('Parse body error:', error);
-                reject(error);
-            }
-        });
-        req.on('error', reject);
-    });
-}
