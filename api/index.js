@@ -553,98 +553,195 @@ if (url.includes('/api/appointments') && method === 'POST') {
         // ============================================
         
         // LISTAR TODOS OS CLIENTES
-        if (url.includes('/api/admin/clients') && method === 'GET' && !url.includes('/clients/')) {
-            try {
-                verifyAdminToken(req.headers.authorization);
-                
-                const { data: clients, error } = await supabase
-                    .from('patients')
-                    .select('id, name, cpf, dob, avatar_url, whatsapp, created_at')
-                    .order('name');
-                
-                if (error) throw error;
-                
-                return res.status(200).json(clients || []);
-            } catch (error) {
-                return res.status(401).json({ error: error.message });
-            }
+        // ============================================
+// ROTAS DE AGENDAMENTOS (ORDEM CORRETA)
+// ============================================
+
+// 1. CANCELAR AGENDAMENTO (PACIENTE) - DEVE VIR PRIMEIRO
+if (url.match(/\/api\/appointments\/[^/]+\/cancel$/) && method === 'POST') {
+    try {
+        const decoded = verifyToken(req.headers.authorization);
+        
+        // Extrair ID da URL: /api/appointments/{id}/cancel
+        const parts = url.split('/');
+        const appointmentId = parts[3];
+        
+        console.log('Cancelando agendamento:', appointmentId);
+        
+        // Primeiro verifica se o agendamento existe e pertence ao paciente
+        const { data: appointment, error: fetchError } = await supabase
+            .from('appointments')
+            .select('*')
+            .eq('id', appointmentId)
+            .eq('patient_id', decoded.id)
+            .single();
+        
+        if (fetchError || !appointment) {
+            return res.status(404).json({ error: 'Agendamento não encontrado' });
         }
         
-        // DETALHES DE UM CLIENTE
-        if (url.match(/\/api\/admin\/clients\/[^/]+$/) && method === 'GET') {
-            try {
-                verifyAdminToken(req.headers.authorization);
-                
-                const clientId = url.split('/').pop();
-                
-                const { data: client, error } = await supabase
-                    .from('patients')
-                    .select('id, name, cpf, dob, avatar_url, whatsapp, created_at')
-                    .eq('id', clientId)
-                    .single();
-                
-                if (error) throw error;
-                
-                return res.status(200).json(client);
-            } catch (error) {
-                return res.status(401).json({ error: error.message });
-            }
+        // Cancela o agendamento
+        const { error } = await supabase
+            .from('appointments')
+            .update({ status: 'cancelado' })
+            .eq('id', appointmentId);
+        
+        if (error) throw error;
+        
+        return res.status(200).json({ success: true });
+    } catch (error) {
+        console.error('Erro ao cancelar:', error);
+        return res.status(500).json({ error: 'Erro ao cancelar agendamento' });
+    }
+}
+
+// 2. CRIAR AGENDAMENTO (PACIENTE)
+if (url === '/api/appointments' && method === 'POST') {
+    try {
+        const decoded = verifyToken(req.headers.authorization);
+        
+        const { doctor_id, appointment_date, notes, whatsapp } = data;
+        
+        if (!doctor_id || !appointment_date || !whatsapp) {
+            return res.status(400).json({ error: 'Médico, data e WhatsApp são obrigatórios' });
         }
         
-        // HISTÓRICO DE UM CLIENTE
-        if (url.match(/\/api\/admin\/clients\/[^/]+\/history$/) && method === 'GET') {
-            try {
-                verifyAdminToken(req.headers.authorization);
-                
-                const parts = url.split('/');
-                const clientId = parts[parts.length - 2];
-                
-                const { data: history, error } = await supabase
-                    .from('consultations')
-                    .select('*')
-                    .eq('patient_id', clientId)
-                    .order('date', { ascending: false });
-                
-                if (error) throw error;
-                
-                return res.status(200).json(history || []);
-            } catch (error) {
-                return res.status(401).json({ error: error.message });
-            }
+        // Horário fixo
+        const appointment_time = '08:00';
+        
+        // Verifica se o médico trabalha nesse dia
+        const { data: workDay, error: workDayError } = await supabase
+            .from('doctor_work_days')
+            .select('*')
+            .eq('doctor_id', doctor_id)
+            .eq('work_date', appointment_date)
+            .single();
+        
+        if (workDayError || !workDay) {
+            return res.status(400).json({ error: 'Médico não trabalha neste dia' });
         }
         
-        // ADICIONAR CONSULTA
-        if (url.match(/\/api\/admin\/clients\/[^/]+\/history$/) && method === 'POST') {
-            try {
-                verifyAdminToken(req.headers.authorization);
-                
-                const parts = url.split('/');
-                const clientId = parts[parts.length - 2];
-                const { date, time, type, notes } = data;
-                
-                if (!date || !type) {
-                    return res.status(400).json({ error: 'Data e tipo são obrigatórios' });
-                }
-                
-                const { data: consultation, error } = await supabase
-                    .from('consultations')
-                    .insert({
-                        patient_id: clientId,
-                        date,
-                        time: time || '00:00',
-                        type,
-                        notes: notes || ''
-                    })
-                    .select()
-                    .single();
-                
-                if (error) throw error;
-                
-                return res.status(201).json(consultation);
-            } catch (error) {
-                return res.status(400).json({ error: error.message });
-            }
+        // Verifica se já existe agendamento no mesmo dia para o mesmo médico
+        const { data: existingAppointment, error: checkError } = await supabase
+            .from('appointments')
+            .select('id')
+            .eq('doctor_id', doctor_id)
+            .eq('appointment_date', appointment_date)
+            .eq('status', 'agendado')
+            .maybeSingle();
+        
+        if (existingAppointment) {
+            return res.status(400).json({ error: 'Já existe um agendamento para esta data' });
         }
+        
+        // Cria o agendamento
+        const { data: appointment, error: insertError } = await supabase
+            .from('appointments')
+            .insert({
+                patient_id: decoded.id,
+                doctor_id,
+                appointment_date,
+                appointment_time,
+                notes: notes || '',
+                whatsapp: whatsapp.trim(),
+                status: 'agendado'
+            })
+            .select()
+            .single();
+        
+        if (insertError) {
+            console.error('Erro ao inserir agendamento:', insertError);
+            throw insertError;
+        }
+        
+        return res.status(201).json(appointment);
+    } catch (error) {
+        console.error('Erro ao criar agendamento:', error);
+        return res.status(400).json({ error: error.message || 'Erro ao criar agendamento' });
+    }
+}
+
+// 3. ATUALIZAR STATUS DO AGENDAMENTO (ADMIN)
+if (url.match(/\/api\/admin\/appointments\/[^/]+\/status$/) && method === 'PUT') {
+    try {
+        verifyAdminToken(req.headers.authorization);
+        
+        // Extrair ID corretamente: /api/admin/appointments/{id}/status
+        const parts = url.split('/');
+        const appointmentId = parts[4];
+        
+        console.log('Atualizando status do agendamento:', appointmentId);
+        
+        const { status } = data;
+        
+        if (!status) {
+            return res.status(400).json({ error: 'Status é obrigatório' });
+        }
+        
+        if (!['agendado', 'cancelado', 'realizado'].includes(status)) {
+            return res.status(400).json({ error: 'Status inválido' });
+        }
+        
+        const { data: appointment, error } = await supabase
+            .from('appointments')
+            .update({ status })
+            .eq('id', appointmentId)
+            .select()
+            .single();
+        
+        if (error) throw error;
+        
+        return res.status(200).json(appointment);
+    } catch (error) {
+        console.error('Erro ao atualizar status:', error);
+        return res.status(400).json({ error: error.message });
+    }
+}
+
+// 4. LISTAR AGENDAMENTOS (ADMIN)
+if (url === '/api/admin/appointments' && method === 'GET') {
+    try {
+        verifyAdminToken(req.headers.authorization);
+        
+        const urlParams = new URLSearchParams(url.split('?')[1] || '');
+        const status = urlParams.get('status');
+        const date = urlParams.get('date');
+        
+        let query = supabase
+            .from('appointments')
+            .select(`
+                *,
+                patients (
+                    name,
+                    cpf,
+                    whatsapp
+                ),
+                doctors (
+                    name,
+                    specialty
+                )
+            `);
+        
+        if (status) {
+            query = query.eq('status', status);
+        }
+        
+        if (date) {
+            query = query.eq('appointment_date', date);
+        }
+        
+        query = query.order('appointment_date', { ascending: false })
+                   .order('appointment_time');
+        
+        const { data: appointments, error } = await query;
+        
+        if (error) throw error;
+        
+        return res.status(200).json(appointments || []);
+    } catch (error) {
+        return res.status(401).json({ error: error.message });
+    }
+}
         
         // EXAMES DE UM CLIENTE
         if (url.match(/\/api\/admin\/clients\/[^/]+\/exams$/) && method === 'GET') {
