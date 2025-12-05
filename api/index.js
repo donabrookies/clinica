@@ -449,73 +449,71 @@ module.exports = async (req, res) => {
         }
         
         // CRIAR AGENDAMENTO
-        if (url.includes('/api/appointments') && method === 'POST') {
-            try {
-                const decoded = verifyToken(req.headers.authorization);
-                
-                const { doctor_id, appointment_date, appointment_time, notes, whatsapp } = data;
-                
-                if (!doctor_id || !appointment_date || !appointment_time || !whatsapp) {
-                    return res.status(400).json({ error: 'Médico, data, horário e WhatsApp são obrigatórios' });
-                }
-                
-                // Verifica se o médico trabalha nesse dia e horário
-                const { data: workDay, error: workDayError } = await supabase
-                    .from('doctor_work_days')
-                    .select('*')
-                    .eq('doctor_id', doctor_id)
-                    .eq('work_date', appointment_date)
-                    .single();
-                
-                if (workDayError || !workDay) {
-                    return res.status(400).json({ error: 'Médico não trabalha neste dia' });
-                }
-                
-                // Converte horários para comparar
-                const appointmentTime = new Date(`1970-01-01T${appointment_time}`);
-                const startTime = new Date(`1970-01-01T${workDay.start_time}`);
-                const endTime = new Date(`1970-01-01T${workDay.end_time}`);
-                
-                if (appointmentTime < startTime || appointmentTime >= endTime) {
-                    return res.status(400).json({ error: 'Horário fora do expediente do médico' });
-                }
-                
-                // Verifica se já existe agendamento no mesmo horário
-                const { data: existingAppointment, error: checkError } = await supabase
-                    .from('appointments')
-                    .select('id')
-                    .eq('doctor_id', doctor_id)
-                    .eq('appointment_date', appointment_date)
-                    .eq('appointment_time', appointment_time)
-                    .eq('status', 'agendado')
-                    .maybeSingle();
-                
-                if (existingAppointment) {
-                    return res.status(400).json({ error: 'Horário já agendado' });
-                }
-                
-                // Cria o agendamento
-                const { data: appointment, error: insertError } = await supabase
-                    .from('appointments')
-                    .insert({
-                        patient_id: decoded.id,
-                        doctor_id,
-                        appointment_date,
-                        appointment_time,
-                        notes: notes || '',
-                        whatsapp: whatsapp.trim(),
-                        status: 'agendado'
-                    })
-                    .select()
-                    .single();
-                
-                if (insertError) throw insertError;
-                
-                return res.status(201).json(appointment);
-            } catch (error) {
-                return res.status(400).json({ error: error.message });
-            }
+       // CRIAR AGENDAMENTO - VERSÃO CORRIGIDA
+if (url.includes('/api/appointments') && method === 'POST') {
+    try {
+        const decoded = verifyToken(req.headers.authorization);
+        
+        const { doctor_id, appointment_date, appointment_time, notes, whatsapp } = data;
+        
+        if (!doctor_id || !appointment_date || !whatsapp) {
+            return res.status(400).json({ error: 'Médico, data e WhatsApp são obrigatórios' });
         }
+        
+        // Horário fixo (08:00) já que removemos a seleção de horário
+        const fixedAppointmentTime = '08:00';
+        
+        // Verifica se o médico trabalha nesse dia
+        const { data: workDay, error: workDayError } = await supabase
+            .from('doctor_work_days')
+            .select('*')
+            .eq('doctor_id', doctor_id)
+            .eq('work_date', appointment_date)
+            .single();
+        
+        if (workDayError || !workDay) {
+            return res.status(400).json({ error: 'Médico não trabalha neste dia' });
+        }
+        
+        // Verifica se já existe agendamento no mesmo dia para o mesmo médico
+        const { data: existingAppointment, error: checkError } = await supabase
+            .from('appointments')
+            .select('id')
+            .eq('doctor_id', doctor_id)
+            .eq('appointment_date', appointment_date)
+            .eq('status', 'agendado')
+            .maybeSingle();
+        
+        if (existingAppointment) {
+            return res.status(400).json({ error: 'Já existe um agendamento para esta data' });
+        }
+        
+        // Cria o agendamento
+        const { data: appointment, error: insertError } = await supabase
+            .from('appointments')
+            .insert({
+                patient_id: decoded.id,
+                doctor_id,
+                appointment_date,
+                appointment_time: fixedAppointmentTime,
+                notes: notes || '',
+                whatsapp: whatsapp.trim(),
+                status: 'agendado'
+            })
+            .select()
+            .single();
+        
+        if (insertError) {
+            console.error('Erro ao inserir agendamento:', insertError);
+            throw insertError;
+        }
+        
+        return res.status(201).json(appointment);
+    } catch (error) {
+        console.error('Erro completo:', error);
+        return res.status(400).json({ error: error.message || 'Erro ao criar agendamento' });
+    }
+}
         
         // CANCELAR AGENDAMENTO
         if (url.match(/\/api\/appointments\/[^/]+\/cancel$/) && method === 'POST') {
