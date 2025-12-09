@@ -638,7 +638,7 @@ module.exports = async (req, res) => {
                             .single();
 
                         // Formatar data para mensagem
-                        const dataObj = new Date(appointment_date);
+                        const dataObj = new Date(appointment_date + 'T00:00:00');
                         const dataFormatada = dataObj.toLocaleDateString('pt-BR');
 
                         // Montar mensagem
@@ -1149,10 +1149,10 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // ROTAS DE AGENDAMENTOS (ADMIN)
+        // ROTAS DE AGENDAMENTOS (ADMIN) - NOVAS ROTAS
         // ============================================
 
-        // LISTAR TODOS OS AGENDAMENTOS
+        // LISTAR TODOS OS AGENDAMENTOS COM FILTROS
         if (url === '/api/admin/appointments' && method === 'GET') {
             try {
                 verifyAdminToken(req.headers.authorization);
@@ -1160,6 +1160,8 @@ module.exports = async (req, res) => {
                 const urlObj = new URL(`http://localhost${url}`);
                 const status = urlObj.searchParams.get('status');
                 const date = urlObj.searchParams.get('date');
+                const doctor_id = urlObj.searchParams.get('doctor_id');
+                const search = urlObj.searchParams.get('search');
 
                 let query = supabase
                     .from('appointments')
@@ -1182,6 +1184,15 @@ module.exports = async (req, res) => {
 
                 if (date) {
                     query = query.eq('appointment_date', date);
+                }
+
+                if (doctor_id) {
+                    query = query.eq('doctor_id', doctor_id);
+                }
+
+                if (search) {
+                    // Buscar por nome do paciente ou CPF
+                    query = query.or(`patients.name.ilike.%${search}%,patients.cpf.ilike.%${search}%`);
                 }
 
                 query = query.order('appointment_date', { ascending: false })
@@ -1297,7 +1308,7 @@ module.exports = async (req, res) => {
 
                 return res.status(200).json({ success: true });
             } catch (error) {
-                return res.status(400).json({ error: error.message });
+                return res.status(401).json({ error: error.message });
             }
         }
 
