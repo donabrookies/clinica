@@ -492,8 +492,9 @@ module.exports = async (req, res) => {
         if (url.startsWith('/api/doctor-work-days') && method === 'GET') {
             try {
                 const decoded = verifyToken(req.headers.authorization);
-                const urlObj = new URL(`http://localhost${url}`);
-                const doctor_id = urlObj.searchParams.get('doctor_id');
+                const queryString = url.split('?')[1] || '';
+                const params = new URLSearchParams(queryString);
+                const doctor_id = params.get('doctor_id');
 
                 if (!doctor_id) {
                     return res.status(400).json({ error: 'ID do médico é obrigatório' });
@@ -1149,19 +1150,23 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // ROTAS DE AGENDAMENTOS (ADMIN) - NOVAS ROTAS
+        // ROTAS DE AGENDAMENTOS (ADMIN) - CORRIGIDAS
         // ============================================
 
-        // LISTAR TODOS OS AGENDAMENTOS COM FILTROS
-        if (url === '/api/admin/appointments' && method === 'GET') {
+        // LISTAR TODOS OS AGENDAMENTOS COM FILTROS - ROTA PRINCIPAL CORRIGIDA
+        if (url.startsWith('/api/admin/appointments') && !url.includes('/status') && method === 'GET') {
             try {
                 verifyAdminToken(req.headers.authorization);
 
-                const urlObj = new URL(`http://localhost${url}`);
-                const status = urlObj.searchParams.get('status');
-                const date = urlObj.searchParams.get('date');
-                const doctor_id = urlObj.searchParams.get('doctor_id');
-                const search = urlObj.searchParams.get('search');
+                // Extrair parâmetros de query da URL
+                const queryString = url.split('?')[1] || '';
+                const params = new URLSearchParams(queryString);
+                const status = params.get('status');
+                const date = params.get('date');
+                const doctor_id = params.get('doctor_id');
+                const search = params.get('search');
+
+                console.log('Filtros recebidos:', { status, date, doctor_id, search });
 
                 let query = supabase
                     .from('appointments')
@@ -1178,21 +1183,32 @@ module.exports = async (req, res) => {
                         )
                     `);
 
-                if (status) {
+                if (status && status.trim() !== '') {
                     query = query.eq('status', status);
                 }
 
-                if (date) {
+                if (date && date.trim() !== '') {
                     query = query.eq('appointment_date', date);
                 }
 
-                if (doctor_id) {
+                if (doctor_id && doctor_id.trim() !== '') {
                     query = query.eq('doctor_id', doctor_id);
                 }
 
-                if (search) {
-                    // Buscar por nome do paciente ou CPF
-                    query = query.or(`patients.name.ilike.%${search}%,patients.cpf.ilike.%${search}%`);
+                if (search && search.trim() !== '') {
+                    // Primeiro, buscar pacientes que correspondem à busca
+                    const { data: matchingPatients, error: patientsError } = await supabase
+                        .from('patients')
+                        .select('id')
+                        .or(`name.ilike.%${search}%,cpf.ilike.%${search}%`);
+
+                    if (!patientsError && matchingPatients && matchingPatients.length > 0) {
+                        const patientIds = matchingPatients.map(p => p.id);
+                        query = query.in('patient_id', patientIds);
+                    } else {
+                        // Se não encontrar pacientes, retorna array vazio
+                        return res.status(200).json([]);
+                    }
                 }
 
                 query = query.order('appointment_date', { ascending: false })
@@ -1204,11 +1220,12 @@ module.exports = async (req, res) => {
 
                 return res.status(200).json(appointments || []);
             } catch (error) {
+                console.error('Erro ao buscar agendamentos:', error);
                 return res.status(401).json({ error: error.message });
             }
         }
 
-        // ATUALIZAR STATUS DO AGENDAMENTO
+        // ATUALIZAR STATUS DO AGENDAMENTO - ROTA ESPECÍFICA
         if (url.includes('/api/admin/appointments/') && url.includes('/status') && method === 'PUT') {
             try {
                 verifyAdminToken(req.headers.authorization);
