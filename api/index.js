@@ -1,10 +1,11 @@
 // ============================================
-// BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO COM MÉDICOS E AGENDAMENTOS E TALK API)
+// BACKEND - PRONTUÁRIO ELETRÔNICO (VERSÃO COM MÉDICOS E AGENDAMENTOS, TALK API E LEMBRETES)
 // ============================================
 
 const { createClient } = require('@supabase/supabase-js');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const cron = require('node-cron');
 
 // Configuração do Supabase
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -14,7 +15,7 @@ const adminUser = process.env.ADMIN_USER || 'Admin';
 const adminPassword = process.env.ADMIN_PASSWORD || 'Admin123';
 
 // Configuração Talk API
-const TALK_API_TOKEN = "xO6iMSrK0uecIJ2uh4TqJFZcuTo9th";
+const TALK_API_TOKEN = "FUeqXKrvOnfGKQjAxG26WZjj4qpvCp";
 const TALK_API_URL = "https://talkapi.ingaja.com.br/api/messages/send";
 
 // Cria cliente do Supabase
@@ -131,6 +132,115 @@ async function sendTalkMessage(phone, message) {
 }
 
 // ============================================
+// FUNÇÃO PARA ENVIAR LEMBRETES DE CONSULTAS
+// ============================================
+
+async function sendAppointmentReminders() {
+    try {
+        console.log('=== INICIANDO ENVIO DE LEMBRETES DE CONSULTAS ===');
+        
+        // Obter data de amanhã no formato YYYY-MM-DD
+        const today = new Date();
+        const tomorrow = new Date(today);
+        tomorrow.setDate(today.getDate() + 1);
+        const tomorrowStr = tomorrow.toISOString().split('T')[0];
+        
+        console.log(`Buscando consultas para amanhã (${tomorrowStr})...`);
+        
+        // Buscar todas as consultas agendadas para amanhã
+        const { data: appointments, error } = await supabase
+            .from('appointments')
+            .select(`
+                *,
+                patients (
+                    name,
+                    cpf,
+                    whatsapp
+                ),
+                doctors (
+                    name,
+                    specialty
+                )
+            `)
+            .eq('appointment_date', tomorrowStr)
+            .eq('status', 'agendado');
+        
+        if (error) {
+            console.error('Erro ao buscar consultas:', error);
+            return;
+        }
+        
+        console.log(`Encontradas ${appointments?.length || 0} consultas para amanhã`);
+        
+        // Enviar lembretes para cada consulta
+        if (appointments && appointments.length > 0) {
+            for (const appointment of appointments) {
+                try {
+                    if (appointment.patients?.whatsapp) {
+                        // Formatar data para exibição
+                        const appointmentDate = new Date(appointment.appointment_date + 'T00:00:00');
+                        const formattedDate = appointmentDate.toLocaleDateString('pt-BR', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                        });
+                        
+                        // Formatar hora
+                        const timeParts = appointment.appointment_time.split(':');
+                        const formattedTime = `${timeParts[0]}:${timeParts[1]}`;
+                        
+                        // Montar mensagem de lembrete
+                        const reminderMessage = `*Lembrete de Consulta* 🏥\n\nOlá ${appointment.patients.name},\n\nEste é um lembrete amigável da sua consulta marcada para *amanhã*:\n\n📅 *Data:* ${formattedDate}\n⏰ *Horário:* ${formattedTime}\n👨‍⚕️ *Médico:* ${appointment.doctors.name}\n🏥 *Especialidade:* ${appointment.doctors.specialty}\n\n📍 *Local:* Clínica Médica\n📞 *Contato:* (11) 9999-9999\n\n*Observações importantes:*\n- Chegue com 15 minutos de antecedência\n- Traga seus documentos e exames recentes\n- Em caso de desistência, cancele com antecedência\n\nAgradecemos sua confiança! 🙏`;
+                        
+                        // Enviar mensagem via Talk API
+                        const sent = await sendTalkMessage(appointment.patients.whatsapp, reminderMessage);
+                        
+                        if (sent) {
+                            console.log(`✅ Lembrete enviado para ${appointment.patients.name} (${appointment.patients.whatsapp})`);
+                        } else {
+                            console.log(`❌ Falha ao enviar lembrete para ${appointment.patients.name}`);
+                        }
+                        
+                        // Aguardar 1 segundo entre envios para evitar sobrecarga
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    } else {
+                        console.log(`⚠️ WhatsApp não cadastrado para ${appointment.patients?.name}`);
+                    }
+                } catch (error) {
+                    console.error(`Erro ao processar lembrete para consulta ${appointment.id}:`, error);
+                }
+            }
+        }
+        
+        console.log('=== ENVIO DE LEMBRETES CONCLUÍDO ===\n');
+        
+    } catch (error) {
+        console.error('Erro geral no envio de lembretes:', error);
+    }
+}
+
+// ============================================
+// CONFIGURAR CRON JOB PARA ENVIAR LEMBRETES
+// ============================================
+
+// Configurar para executar todos os dias às 10h00 da manhã
+// Formato: segundo minuto hora dia-do-mês mês dia-da-semana
+cron.schedule('0 10 * * *', async () => {
+    console.log('Executando job de lembretes automáticos...');
+    await sendAppointmentReminders();
+}, {
+    scheduled: true,
+    timezone: "America/Sao_Paulo" // Fuso horário de Brasília
+});
+
+// Função manual para testar o envio de lembretes
+async function testReminders() {
+    console.log('Testando envio de lembretes...');
+    await sendAppointmentReminders();
+}
+
+// ============================================
 // HANDLER PRINCIPAL
 // ============================================
 
@@ -175,6 +285,7 @@ module.exports = async (req, res) => {
                 message: 'API do Prontuário Eletrônico',
                 version: '2.0.0',
                 status: 'online',
+                features: ['pacientes', 'médicos', 'agendamentos', 'lembretes_automáticos'],
                 timestamp: new Date().toISOString()
             });
         }
@@ -335,6 +446,25 @@ module.exports = async (req, res) => {
                 success: true,
                 token
             });
+        }
+
+        // ============================================
+        // NOVA ROTA: TESTAR LEMBRETES (APENAS PARA TESTES)
+        // ============================================
+        if (url === '/api/admin/test-reminders' && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                console.log('Iniciando teste de lembretes...');
+                await testReminders();
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Teste de lembretes iniciado. Verifique os logs.'
+                });
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
         }
 
         // ============================================
@@ -644,7 +774,7 @@ module.exports = async (req, res) => {
 
                         // Montar mensagem
                         const cpfFormatado = patientData.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
-                        const mensagem = `Olá ${patientData.name} (CPF: ${cpfFormatado}),\n\nEstamos entrando em contato para confirmar sua consulta com ${doctorData?.name || 'o médico'} no dia ${dataFormatada} às ${appointment_time}.\n\nPor favor, confirme se poderá comparecer respondendo esta mensagem.\n\nAtenciosamente,\nClínica`;
+                        const mensagem = `Olá ${patientData.name} (CPF: ${cpfFormatado}),\n\nEstamos entrando em contato para confirmar sua consulta com ${doctorData?.name || 'o médico'} no dia ${dataFormatada} às ${appointment_time}.\n\n*IMPORTANTE:* Você receberá um lembrete no dia anterior à consulta.\n\nPor favor, confirme se poderá comparecer respondendo esta mensagem.\n\nAtenciosamente,\nClínica`;
 
                         // Enviar mensagem via Talk API (assincrono - não bloqueia a resposta)
                         sendTalkMessage(whatsapp, mensagem)
@@ -1334,7 +1464,8 @@ module.exports = async (req, res) => {
             return res.status(200).json({
                 message: 'API está funcionando',
                 timestamp: new Date().toISOString(),
-                environment: 'production'
+                environment: 'production',
+                features: ['lembretes_automáticos']
             });
         }
 
