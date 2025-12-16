@@ -221,6 +221,105 @@ async function sendAppointmentReminders() {
 }
 
 // ============================================
+// NOVA FUNÇÃO: ENVIAR LEMBRETES PARA UMA DATA ESPECÍFICA (MANUAL)
+// ============================================
+
+async function sendRemindersForDate(dateStr) {
+    try {
+        console.log('=== ENVIO MANUAL DE LEMBRETES ===');
+        console.log(`Enviando lembretes para a data: ${dateStr}`);
+        
+        // Buscar todas as consultas agendadas para a data específica
+        const { data: appointments, error } = await supabase
+            .from('appointments')
+            .select(`
+                *,
+                patients (
+                    name,
+                    cpf,
+                    whatsapp
+                ),
+                doctors (
+                    name,
+                    specialty
+                )
+            `)
+            .eq('appointment_date', dateStr)
+            .eq('status', 'agendado');
+        
+        if (error) {
+            console.error('Erro ao buscar consultas:', error);
+            return { success: false, error: error.message };
+        }
+        
+        console.log(`Encontradas ${appointments?.length || 0} consultas para ${dateStr}`);
+        
+        let sentCount = 0;
+        let failedCount = 0;
+        
+        // Enviar lembretes para cada consulta
+        if (appointments && appointments.length > 0) {
+            for (const appointment of appointments) {
+                try {
+                    if (appointment.patients?.whatsapp) {
+                        // Formatar data para exibição
+                        const appointmentDate = new Date(appointment.appointment_date + 'T00:00:00');
+                        const formattedDate = appointmentDate.toLocaleDateString('pt-BR', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                        });
+                        
+                        // Formatar hora
+                        const timeParts = appointment.appointment_time.split(':');
+                        const formattedTime = `${timeParts[0]}:${timeParts[1]}`;
+                        
+                        // Montar mensagem de lembrete
+                        const reminderMessage = `*Lembrete de Consulta* 🏥\n\nOlá ${appointment.patients.name},\n\nEste é um lembrete da sua consulta marcada para:\n\n📅 *Data:* ${formattedDate}\n⏰ *Horário:* ${formattedTime}\n👨‍⚕️ *Médico:* ${appointment.doctors.name}\n🏥 *Especialidade:* ${appointment.doctors.specialty}\n\n📍 *Local:* Clínica Médica\n📞 *Contato:* (11) 9999-9999\n\n*Observações importantes:*\n- Chegue com 15 minutos de antecedência\n- Traga seus documentos e exames recentes\n- Em caso de desistência, cancele com antecedência\n\nAgradecemos sua confiança! 🙏`;
+                        
+                        // Enviar mensagem via Talk API
+                        const sent = await sendTalkMessage(appointment.patients.whatsapp, reminderMessage);
+                        
+                        if (sent) {
+                            console.log(`✅ Lembrete enviado para ${appointment.patients.name} (${appointment.patients.whatsapp})`);
+                            sentCount++;
+                        } else {
+                            console.log(`❌ Falha ao enviar lembrete para ${appointment.patients.name}`);
+                            failedCount++;
+                        }
+                        
+                        // Aguardar 1 segundo entre envios para evitar sobrecarga
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    } else {
+                        console.log(`⚠️ WhatsApp não cadastrado para ${appointment.patients?.name}`);
+                        failedCount++;
+                    }
+                } catch (error) {
+                    console.error(`Erro ao processar lembrete para consulta ${appointment.id}:`, error);
+                    failedCount++;
+                }
+            }
+        }
+        
+        console.log('=== ENVIO MANUAL CONCLUÍDO ===');
+        console.log(`Total: ${sentCount + failedCount}, Enviados: ${sentCount}, Falhas: ${failedCount}`);
+        
+        return {
+            success: true,
+            message: `Lembretes enviados: ${sentCount} com sucesso, ${failedCount} falhas`,
+            sent: sentCount,
+            failed: failedCount,
+            total: appointments?.length || 0
+        };
+        
+    } catch (error) {
+        console.error('Erro geral no envio manual de lembretes:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// ============================================
 // CONFIGURAR CRON JOB PARA ENVIAR LEMBRETES
 // ============================================
 
@@ -449,7 +548,41 @@ module.exports = async (req, res) => {
         }
 
         // ============================================
-        // NOVA ROTA: TESTAR LEMBRETES (APENAS PARA TESTES)
+        // NOVA ROTA: ENVIAR LEMBRETES MANUALMENTE PARA UMA DATA ESPECÍFICA
+        // ============================================
+        if (url === '/api/admin/send-reminders' && method === 'POST') {
+            try {
+                verifyAdminToken(req.headers.authorization);
+                
+                const { date } = data;
+                
+                if (!date) {
+                    return res.status(400).json({ error: 'Data é obrigatória' });
+                }
+                
+                console.log('Iniciando envio manual de lembretes para:', date);
+                const result = await sendRemindersForDate(date);
+                
+                if (!result.success) {
+                    return res.status(500).json({ error: result.error });
+                }
+                
+                return res.status(200).json({
+                    success: true,
+                    message: result.message,
+                    details: {
+                        sent: result.sent,
+                        failed: result.failed,
+                        total: result.total
+                    }
+                });
+            } catch (error) {
+                return res.status(401).json({ error: error.message });
+            }
+        }
+
+        // ============================================
+        // ROTA: TESTAR LEMBRETES (APENAS PARA TESTES)
         // ============================================
         if (url === '/api/admin/test-reminders' && method === 'POST') {
             try {
@@ -1465,7 +1598,7 @@ module.exports = async (req, res) => {
                 message: 'API está funcionando',
                 timestamp: new Date().toISOString(),
                 environment: 'production',
-                features: ['lembretes_automáticos']
+                features: ['lembretes_automáticos', 'lembretes_manuais']
             });
         }
 
