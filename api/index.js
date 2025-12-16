@@ -15,7 +15,7 @@ const adminUser = process.env.ADMIN_USER || 'Admin';
 const adminPassword = process.env.ADMIN_PASSWORD || 'Admin123';
 
 // Configuração Talk API
-const TALK_API_TOKEN = "FUeqXKrvOnfGKQjAxG26WZjj4qpvCp";
+const TALK_API_TOKEN = "xO6iMSrK0uecIJ2uh4TqJFZcuTo9th";
 const TALK_API_URL = "https://talkapi.ingaja.com.br/api/messages/send";
 
 // Cria cliente do Supabase
