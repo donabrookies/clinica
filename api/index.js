@@ -823,19 +823,22 @@ module.exports = async (req, res) => {
             }
         }
 
-        // 2. CRIAR AGENDAMENTO (COM ENVIO DE MENSAGEM VIA TALK API)
+        // 2. CRIAR AGENDAMENTO (COM ENVIO DE MENSAGEM VIA TALK API) - CORRIGIDO
         if (url === '/api/appointments' && method === 'POST') {
             try {
                 const decoded = verifyToken(req.headers.authorization);
 
-                const { doctor_id, appointment_date, notes, whatsapp } = data;
+                const { doctor_id, appointment_date, appointment_time, notes, whatsapp } = data;
 
-                if (!doctor_id || !appointment_date || !whatsapp) {
-                    return res.status(400).json({ error: 'Médico, data e WhatsApp são obrigatórios' });
+                if (!doctor_id || !appointment_date || !appointment_time || !whatsapp) {
+                    return res.status(400).json({ error: 'Médico, data, horário e WhatsApp são obrigatórios' });
                 }
 
-                // Horário fixo
-                const appointment_time = '08:00';
+                // Validar formato do horário (HH:MM)
+                const timeRegex = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/;
+                if (!timeRegex.test(appointment_time)) {
+                    return res.status(400).json({ error: 'Formato de horário inválido. Use HH:MM' });
+                }
 
                 // Verificar se o médico trabalha nesse dia
                 const { data: workDay, error: workDayError } = await supabase
@@ -849,13 +852,24 @@ module.exports = async (req, res) => {
                     return res.status(400).json({ error: 'Médico não trabalha neste dia' });
                 }
 
+                // Verificar se o horário está dentro do intervalo de trabalho
+                const startTime = new Date(`2000-01-01T${workDay.start_time}`);
+                const endTime = new Date(`2000-01-01T${workDay.end_time}`);
+                const selectedTime = new Date(`2000-01-01T${appointment_time}:00`);
+                
+                if (selectedTime < startTime || selectedTime >= endTime) {
+                    return res.status(400).json({ 
+                        error: `Horário fora do expediente. O médico trabalha das ${workDay.start_time.substring(0, 5)} às ${workDay.end_time.substring(0, 5)}` 
+                    });
+                }
+
                 // Verificar se já existe agendamento no mesmo horário para o mesmo médico
                 const { data: existingAppointment, error: checkError } = await supabase
                     .from('appointments')   
                     .select('id')
                     .eq('doctor_id', doctor_id)
                     .eq('appointment_date', appointment_date)
-                    .eq('appointment_time', appointment_time)
+                    .eq('appointment_time', appointment_time + ':00') // Adiciona segundos para compatibilidade
                     .eq('status', 'agendado')
                     .maybeSingle();
 
@@ -863,14 +877,14 @@ module.exports = async (req, res) => {
                     return res.status(400).json({ error: 'Já existe um agendamento para este horário' });
                 }
 
-                // Cria o agendamento
+                // Cria o agendamento com o horário correto (adiciona segundos)
                 const { data: appointment, error: insertError } = await supabase
                     .from('appointments')
                     .insert({
                         patient_id: decoded.id,
                         doctor_id,
                         appointment_date,
-                        appointment_time,
+                        appointment_time: appointment_time + ':00', // Adiciona segundos
                         notes: notes || '',
                         whatsapp: whatsapp.trim(),
                         status: 'agendado'
