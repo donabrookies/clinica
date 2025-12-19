@@ -138,15 +138,15 @@ async function sendTalkMessage(phone, message) {
 async function sendAppointmentReminders() {
     try {
         console.log('=== INICIANDO ENVIO DE LEMBRETES DE CONSULTAS ===');
-        
+
         // Obter data de amanhã no formato YYYY-MM-DD
         const today = new Date();
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
         const tomorrowStr = tomorrow.toISOString().split('T')[0];
-        
+
         console.log(`Buscando consultas para amanhã (${tomorrowStr})...`);
-        
+
         // Buscar todas as consultas agendadas para amanhã
         const { data: appointments, error } = await supabase
             .from('appointments')
@@ -164,14 +164,14 @@ async function sendAppointmentReminders() {
             `)
             .eq('appointment_date', tomorrowStr)
             .eq('status', 'agendado');
-        
+
         if (error) {
             console.error('Erro ao buscar consultas:', error);
             return;
         }
-        
+
         console.log(`Encontradas ${appointments?.length || 0} consultas para amanhã`);
-        
+
         // Enviar lembretes para cada consulta
         if (appointments && appointments.length > 0) {
             for (const appointment of appointments) {
@@ -185,23 +185,23 @@ async function sendAppointmentReminders() {
                             month: 'long',
                             day: 'numeric'
                         });
-                        
+
                         // Formatar hora
                         const timeParts = appointment.appointment_time.split(':');
                         const formattedTime = `${timeParts[0]}:${timeParts[1]}`;
-                        
+
                         // Montar mensagem de lembrete
                         const reminderMessage = `*Lembrete de Consulta* 🏥\n\nOlá ${appointment.patients.name},\n\nEste é um lembrete amigável da sua consulta marcada para *amanhã*:\n\n📅 *Data:* ${formattedDate}\n⏰ *Horário:* ${formattedTime}\n👨‍⚕️ *Médico:* ${appointment.doctors.name}\n🏥 *Especialidade:* ${appointment.doctors.specialty}\n\n📍 *Local:* Clínica Médica\n📞 *Contato:* (11) 9999-9999\n\n*Observações importantes:*\n- Chegue com 15 minutos de antecedência\n- Traga seus documentos e exames recentes\n- Em caso de desistência, cancele com antecedência\n\nAgradecemos sua confiança! 🙏`;
-                        
+
                         // Enviar mensagem via Talk API
                         const sent = await sendTalkMessage(appointment.patients.whatsapp, reminderMessage);
-                        
+
                         if (sent) {
                             console.log(`✅ Lembrete enviado para ${appointment.patients.name} (${appointment.patients.whatsapp})`);
                         } else {
                             console.log(`❌ Falha ao enviar lembrete para ${appointment.patients.name}`);
                         }
-                        
+
                         // Aguardar 1 segundo entre envios para evitar sobrecarga
                         await new Promise(resolve => setTimeout(resolve, 1000));
                     } else {
@@ -212,9 +212,9 @@ async function sendAppointmentReminders() {
                 }
             }
         }
-        
+
         console.log('=== ENVIO DE LEMBRETES CONCLUÍDO ===\n');
-        
+
     } catch (error) {
         console.error('Erro geral no envio de lembretes:', error);
     }
@@ -228,7 +228,7 @@ async function sendRemindersForDate(dateStr) {
     try {
         console.log('=== ENVIO MANUAL DE LEMBRETES ===');
         console.log(`Enviando lembretes para a data: ${dateStr}`);
-        
+
         // Buscar todas as consultas agendadas para a data específica
         const { data: appointments, error } = await supabase
             .from('appointments')
@@ -246,17 +246,17 @@ async function sendRemindersForDate(dateStr) {
             `)
             .eq('appointment_date', dateStr)
             .eq('status', 'agendado');
-        
+
         if (error) {
             console.error('Erro ao buscar consultas:', error);
             return { success: false, error: error.message };
         }
-        
+
         console.log(`Encontradas ${appointments?.length || 0} consultas para ${dateStr}`);
-        
+
         let sentCount = 0;
         let failedCount = 0;
-        
+
         // Enviar lembretes para cada consulta
         if (appointments && appointments.length > 0) {
             for (const appointment of appointments) {
@@ -270,17 +270,17 @@ async function sendRemindersForDate(dateStr) {
                             month: 'long',
                             day: 'numeric'
                         });
-                        
+
                         // Formatar hora
                         const timeParts = appointment.appointment_time.split(':');
                         const formattedTime = `${timeParts[0]}:${timeParts[1]}`;
-                        
+
                         // Montar mensagem de lembrete
                         const reminderMessage = `*Lembrete de Consulta* 🏥\n\nOlá ${appointment.patients.name},\n\nEste é um lembrete da sua consulta marcada para:\n\n📅 *Data:* ${formattedDate}\n⏰ *Horário:* ${formattedTime}\n👨‍⚕️ *Médico:* ${appointment.doctors.name}\n🏥 *Especialidade:* ${appointment.doctors.specialty}\n\n📍 *Local:* Clínica Médica\n📞 *Contato:* (11) 9999-9999\n\n*Observações importantes:*\n- Chegue com 15 minutos de antecedência\n- Traga seus documentos e exames recentes\n- Em caso de desistência, cancele com antecedência\n\nAgradecemos sua confiança! 🙏`;
-                        
+
                         // Enviar mensagem via Talk API
                         const sent = await sendTalkMessage(appointment.patients.whatsapp, reminderMessage);
-                        
+
                         if (sent) {
                             console.log(`✅ Lembrete enviado para ${appointment.patients.name} (${appointment.patients.whatsapp})`);
                             sentCount++;
@@ -288,7 +288,7 @@ async function sendRemindersForDate(dateStr) {
                             console.log(`❌ Falha ao enviar lembrete para ${appointment.patients.name}`);
                             failedCount++;
                         }
-                        
+
                         // Aguardar 1 segundo entre envios para evitar sobrecarga
                         await new Promise(resolve => setTimeout(resolve, 1000));
                     } else {
@@ -301,10 +301,10 @@ async function sendRemindersForDate(dateStr) {
                 }
             }
         }
-        
+
         console.log('=== ENVIO MANUAL CONCLUÍDO ===');
         console.log(`Total: ${sentCount + failedCount}, Enviados: ${sentCount}, Falhas: ${failedCount}`);
-        
+
         return {
             success: true,
             message: `Lembretes enviados: ${sentCount} com sucesso, ${failedCount} falhas`,
@@ -312,7 +312,7 @@ async function sendRemindersForDate(dateStr) {
             failed: failedCount,
             total: appointments?.length || 0
         };
-        
+
     } catch (error) {
         console.error('Erro geral no envio manual de lembretes:', error);
         return { success: false, error: error.message };
@@ -553,20 +553,20 @@ module.exports = async (req, res) => {
         if (url === '/api/admin/send-reminders' && method === 'POST') {
             try {
                 verifyAdminToken(req.headers.authorization);
-                
+
                 const { date } = data;
-                
+
                 if (!date) {
                     return res.status(400).json({ error: 'Data é obrigatória' });
                 }
-                
+
                 console.log('Iniciando envio manual de lembretes para:', date);
                 const result = await sendRemindersForDate(date);
-                
+
                 if (!result.success) {
                     return res.status(500).json({ error: result.error });
                 }
-                
+
                 return res.status(200).json({
                     success: true,
                     message: result.message,
@@ -587,10 +587,10 @@ module.exports = async (req, res) => {
         if (url === '/api/admin/test-reminders' && method === 'POST') {
             try {
                 verifyAdminToken(req.headers.authorization);
-                
+
                 console.log('Iniciando teste de lembretes...');
                 await testReminders();
-                
+
                 return res.status(200).json({
                     success: true,
                     message: 'Teste de lembretes iniciado. Verifique os logs.'
@@ -849,17 +849,18 @@ module.exports = async (req, res) => {
                     return res.status(400).json({ error: 'Médico não trabalha neste dia' });
                 }
 
-                // Verificar se já existe agendamento no mesmo dia para o mesmo médico
+                // Verificar se já existe agendamento no mesmo horário para o mesmo médico
                 const { data: existingAppointment, error: checkError } = await supabase
-                    .from('appointments')
+                    .from('appointments')   
                     .select('id')
                     .eq('doctor_id', doctor_id)
                     .eq('appointment_date', appointment_date)
+                    .eq('appointment_time', appointment_time)
                     .eq('status', 'agendado')
                     .maybeSingle();
 
                 if (existingAppointment) {
-                    return res.status(400).json({ error: 'Já existe um agendamento para esta data' });
+                    return res.status(400).json({ error: 'Já existe um agendamento para este horário' });
                 }
 
                 // Cria o agendamento
